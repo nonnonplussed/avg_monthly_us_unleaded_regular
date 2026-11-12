@@ -114,8 +114,12 @@ with tab_seasonal:
     date_span = f"{monthly_df['Date'].min():%B %Y} - {monthly_df['Date'].max():%B %Y}"
     subtitle_m = f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
 
+    seasonal_records = summary[
+        ["Month", "Count", "Mean", "Avg_Price_Fmt", "Change_Jan_Fmt", "Pct_Jan_Fmt", "MoM_Pct_Fmt"]
+    ].to_dict(orient="records")
+
     seasonal_chart = (
-        alt.Chart(alt.Data(values=summary.reset_index(drop=True).to_dict(orient="records")))
+        alt.Chart(alt.Data(values=seasonal_records))
         .mark_bar()
         .encode(
             x=alt.X(
@@ -126,7 +130,8 @@ with tab_seasonal:
                 axis=alt.Axis(
                     labelAngle=0,
                     labelFontSize=12,
-                    titleFontSize=14,
+                    titleFontSize=13,
+                    titlePadding=8,
                     labelColor="#333333",
                     titleColor="#111111",
                     grid=True,
@@ -143,7 +148,8 @@ with tab_seasonal:
                     grid=True,
                     gridColor="#EAEAEA",
                     labelFontSize=12,
-                    titleFontSize=14,
+                    titleFontSize=13,
+                    titlePadding=8,
                     labelColor="#333333",
                     titleColor="#111111",
                 ),
@@ -177,15 +183,15 @@ with tab_seasonal:
                 text="Average Price of Unleaded Regular Gasoline by Month of the Year",
                 subtitle=subtitle_m,
                 anchor="start",
-                fontSize=17.5,
-                subtitleFontSize=13.5,
+                fontSize=17,
+                subtitleFontSize=13,
                 color="#111111",
                 subtitleColor="#333333",
-                offset=12,
+                offset=14,
             ),
         )
         .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-        .configure(background="white")
+        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
     )
 
     st.altair_chart(seasonal_chart, width="stretch")
@@ -250,7 +256,11 @@ with tab_annual:
         f"${base_price:.2f} → ${end_price:.2f}",
     )
 
-    ann_records = ann.to_dict(orient="records")
+    # Pass only non-NaN columns so strict browser JSON.parse succeeds
+    ann_records = ann[
+        ["Year_Str", "Price", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt", "Pct_Start_Fmt"]
+    ].to_dict(orient="records")
+
     y_max_a = float(np.ceil(ann["Price"].max() * 2) / 2 + 0.25)
     tick_years = [str(y) for y in range(start_year, end_year + 1, 3)]
 
@@ -262,7 +272,8 @@ with tab_annual:
                 values=tick_years,
                 labelAngle=0,
                 labelFontSize=12,
-                titleFontSize=14,
+                titleFontSize=13,
+                titlePadding=8,
                 labelColor="#333333",
                 titleColor="#111111",
                 grid=True,
@@ -273,14 +284,8 @@ with tab_annual:
 
     area_layer = base_annual.mark_area(
         line={"color": "#25858e", "strokeWidth": 2.5},
-        color=alt.Gradient(
-            gradient="linear",
-            stops=[
-                alt.GradientStop(color="rgba(37, 133, 142, 0.28)", offset=0),
-                alt.GradientStop(color="rgba(37, 133, 142, 0.02)", offset=1),
-            ],
-            x1=1, x2=1, y1=1, y2=0,
-        ),
+        color="#25858e",
+        opacity=0.16,
     ).encode(
         y=alt.Y(
             "Price:Q",
@@ -290,7 +295,8 @@ with tab_annual:
                 grid=True,
                 gridColor="#EAEAEA",
                 labelFontSize=12,
-                titleFontSize=14,
+                titleFontSize=13,
+                titlePadding=8,
                 labelColor="#333333",
                 titleColor="#111111",
             ),
@@ -323,25 +329,28 @@ with tab_annual:
     annual_line_chart = (
         alt.layer(area_layer, points_layer, mean_rule)
         .properties(
-            height=380,
+            height=390,
             title=alt.TitleParams(
                 text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
                 subtitle=subtitle_a,
                 anchor="start",
-                fontSize=17,
-                subtitleFontSize=13,
+                fontSize=16.5,
+                subtitleFontSize=12.5,
                 color="#111111",
                 subtitleColor="#444444",
-                offset=12,
+                offset=14,
             ),
         )
         .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-        .configure(background="white")
+        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
     )
 
     st.altair_chart(annual_line_chart, width="stretch")
 
-    yoy_records = ann.dropna(subset=["YoY_Pct"]).to_dict(orient="records")
+    yoy_clean = ann.dropna(subset=["YoY_Pct"])
+    yoy_records = yoy_clean[
+        ["Year_Str", "YoY_Pct", "Direction", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt"]
+    ].to_dict(orient="records")
     yoy_tick_years = [str(y) for y in range(start_year + 1, end_year + 1, 3)]
 
     yoy_bar_chart = (
@@ -356,7 +365,8 @@ with tab_annual:
                     values=yoy_tick_years,
                     labelAngle=0,
                     labelFontSize=12,
-                    titleFontSize=14,
+                    titleFontSize=13,
+                    titlePadding=8,
                     labelColor="#333333",
                     titleColor="#111111",
                     grid=True,
@@ -370,7 +380,8 @@ with tab_annual:
                     grid=True,
                     gridColor="#EAEAEA",
                     labelFontSize=12,
-                    titleFontSize=14,
+                    titleFontSize=13,
+                    titlePadding=8,
                     labelColor="#333333",
                     titleColor="#111111",
                 ),
@@ -388,7 +399,7 @@ with tab_annual:
             ],
         )
         .properties(
-            height=250,
+            height=270,
             title=alt.TitleParams(
                 text=f"Year-over-Year Percentage Price Change ({start_year + 1}–{end_year})",
                 subtitle="Annual percentage swing compared to the prior calendar year",
@@ -397,11 +408,11 @@ with tab_annual:
                 subtitleFontSize=12.5,
                 color="#111111",
                 subtitleColor="#444444",
-                offset=10,
+                offset=14,
             ),
         )
         .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-        .configure(background="white")
+        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
     )
 
     st.altair_chart(yoy_bar_chart, width="stretch")
