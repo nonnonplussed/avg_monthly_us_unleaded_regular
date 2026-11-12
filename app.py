@@ -108,7 +108,7 @@ display_df = pd.DataFrame({
     "Change vs. January": summary["Change_vs_Jan"].map("{:+.2f}".format),
     "% Change vs. January": summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format),
 })
-st.dataframe(display_df, use_container_width=True, hide_index=True)
+st.dataframe(display_df, height="content", use_container_width=True, hide_index=True)
 st.caption(
     f"Sources: U.S. EIA (EMM_EPMR_PTE_NUS_DPG) & BLS CPI-U via FRED (CPIAUCSL), "
     f"{date_span} ({len(df)} monthly observations)."
