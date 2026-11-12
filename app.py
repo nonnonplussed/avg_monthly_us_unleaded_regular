@@ -2,9 +2,7 @@ import io
 import requests
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import matplotlib.ticker as ticker
+import altair as alt
 import streamlit as st
 
 st.set_page_config(page_title="U.S. Regular Gasoline Seasonal Trends", layout="centered")
@@ -54,14 +52,14 @@ mode = st.radio(
 is_real = mode.startswith("Inflation-Adjusted")
 price_col = "Real_Price" if is_real else "Nominal_Price"
 
-month_names = ["01 Jan", "02 Feb", "03 Mar", "04 Apr", "05 May", "06 Jun", "07 Jul", "08 Aug", "09 Sep", "10 Oct", "11 Nov", "12 Dec"]
-df["Month_Num"] = df["Date"].dt.month
+month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+viridis_hex = [
+    "#440154", "#482173", "#433e85", "#38588c", "#2d708e", "#25858e",
+    "#1e9b8a", "#2ab07f", "#52c569", "#86d549", "#c2df23", "#fde725",
+]
 
-summary = (
-    df.groupby("Month_Num")[price_col]
-    .agg(Count="count", Mean="mean")
-    .reindex(range(1, 13))
-)
+df["Month_Num"] = df["Date"].dt.month
+summary = df.groupby("Month_Num")[price_col].agg(Count="count", Mean="mean").reindex(range(1, 13))
 summary["Month"] = month_names
 
 jan_mean = summary.loc[1, "Mean"]
@@ -72,55 +70,104 @@ prev_mean = summary["Mean"].shift(1)
 prev_mean.iloc[0] = summary["Mean"].iloc[-1]  # Wrap Dec -> Jan for January's comparison
 summary["MoM_Pct"] = ((summary["Mean"] - prev_mean) / prev_mean) * 100
 
-# Build chart
-fig, ax = plt.subplots(figsize=(10.5, 7.2), dpi=150)
-fig.patch.set_facecolor("white")
-ax.set_facecolor("white")
+# Pre-format strings so hover tooltips and table stay 100% consistent
+summary["Avg_Price_Fmt"] = summary["Mean"].map("${:.2f}".format)
+summary["Change_Jan_Fmt"] = summary["Change_vs_Jan"].map("{:+.2f}".format)
+summary["Pct_Jan_Fmt"] = summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format)
+summary["MoM_Pct_Fmt"] = summary["MoM_Pct"].map("{:+.1f}%".format)
 
-cmap = plt.get_cmap("viridis")
-colors = [cmap(i / 11.0) for i in range(12)]
-x = np.arange(12)
-ax.bar(x, summary["Mean"], width=0.82, color=colors, zorder=3)
-
-y_max = np.ceil(summary["Mean"].max() * 2) / 2 + 0.25
-ax.set_ylim(-0.08, max(2.85, y_max))
-ax.set_xlim(-0.65, 11.65)
-ax.yaxis.set_major_locator(ticker.MultipleLocator(1.0))
-ax.yaxis.set_minor_locator(ticker.MultipleLocator(0.5))
-ax.set_xticks(x)
-ax.set_xticklabels(month_names, fontsize=11, color="#333333")
-ax.grid(True, which="major", axis="both", color="#E5E5E5", linewidth=0.9, zorder=0)
-ax.grid(True, which="minor", axis="y", color="#F0F0F0", linewidth=0.7, zorder=0)
-ax.set_xlabel("Month", fontsize=13, labelpad=8)
-ax.set_ylabel(f"Average Price ({latest_label} $)" if is_real else "Average Price ($)", fontsize=13, labelpad=8)
-
+y_max = float(max(2.85, np.ceil(summary["Mean"].max() * 2) / 2 + 0.25))
+y_grid_vals = [round(float(v), 1) for v in np.arange(0, y_max + 0.01, 0.5)]
 date_span = f"{df['Date'].min():%B %Y} - {df['Date'].max():%B %Y}"
 subtitle = f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
-fig.text(0.075, 0.945, "Average Price of Unleaded Regular Gasoline by Month of the Year", fontsize=15.5, ha="left")
-fig.text(0.075, 0.905, subtitle, fontsize=12.5, ha="left")
+y_label = f"Average Price ({latest_label} $)" if is_real else "Average Price ($)"
 
-legend_handles = [mpatches.Patch(color=colors[i], label=month_names[i]) for i in range(12)]
-ax.legend(
-    handles=legend_handles,
-    title="month",
-    loc="center left",
-    bbox_to_anchor=(1.02, 0.5),
-    frameon=False,
-    fontsize=10.5,
-    title_fontsize=12.5,
+chart_records = summary.reset_index(drop=True).to_dict(orient="records")
+
+chart = (
+    alt.Chart(alt.Data(values=chart_records))
+    .mark_bar()
+    .encode(
+        x=alt.X(
+            "Month:N",
+            sort=month_names,
+            title="Month",
+            scale=alt.Scale(paddingInner=0.16, paddingOuter=0.12),
+            axis=alt.Axis(
+                labelAngle=0,
+                labelFontSize=12,
+                titleFontSize=14,
+                labelColor="#333333",
+                titleColor="#111111",
+                grid=True,
+                gridColor="#EAEAEA",
+            ),
+        ),
+        y=alt.Y(
+            "Mean:Q",
+            title=y_label,
+            scale=alt.Scale(domain=[0, y_max]),
+            axis=alt.Axis(
+                values=y_grid_vals,
+                labelExpr="datum.value % 1 === 0 ? datum.value : ''",
+                grid=True,
+                gridColor="#EAEAEA",
+                labelFontSize=12,
+                titleFontSize=14,
+                labelColor="#333333",
+                titleColor="#111111",
+            ),
+        ),
+        color=alt.Color(
+            "Month:N",
+            sort=month_names,
+            scale=alt.Scale(domain=month_names, range=viridis_hex),
+            legend=alt.Legend(
+                title="month",
+                orient="right",
+                titleFontSize=13,
+                labelFontSize=11.5,
+                symbolType="square",
+                symbolSize=220,
+                labelColor="#333333",
+                titleColor="#111111",
+            ),
+        ),
+        tooltip=[
+            alt.Tooltip("Avg_Price_Fmt:N", title="Average Price"),
+            alt.Tooltip("Change_Jan_Fmt:N", title="Change vs. January"),
+            alt.Tooltip("Pct_Jan_Fmt:N", title="% Change vs. January"),
+            alt.Tooltip("MoM_Pct_Fmt:N", title="% Change vs. Prev. Month"),
+            alt.Tooltip("Count:Q", title="Observations"),
+        ],
+    )
+    .properties(
+        height=480,
+        title=alt.TitleParams(
+            text="Average Price of Unleaded Regular Gasoline by Month of the Year",
+            subtitle=subtitle,
+            anchor="start",
+            fontSize=18,
+            subtitleFontSize=14,
+            color="#111111",
+            subtitleColor="#333333",
+            offset=12,
+        ),
+    )
+    .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
+    .configure(background="white")
 )
-plt.subplots_adjust(left=0.075, right=0.88, top=0.87, bottom=0.09)
 
-st.pyplot(fig)
+st.altair_chart(chart, width="stretch")
 
 # Display full 12-month table without a vertical scrollbar
 display_df = pd.DataFrame({
     "Month": summary["Month"],
     "Observations": summary["Count"],
-    "Average Price": summary["Mean"].map("${:.2f}".format),
-    "Change vs. January": summary["Change_vs_Jan"].map("{:+.2f}".format),
-    "% Change vs. January": summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format),
-    "% Change vs. Prev. Month": summary["MoM_Pct"].map("{:+.1f}%".format),
+    "Average Price": summary["Avg_Price_Fmt"],
+    "Change vs. January": summary["Change_Jan_Fmt"],
+    "% Change vs. January": summary["Pct_Jan_Fmt"],
+    "% Change vs. Prev. Month": summary["MoM_Pct_Fmt"],
 })
 st.dataframe(display_df, height="content", width="stretch", hide_index=True)
 
