@@ -113,3 +113,6 @@ st.caption(
     f"Sources: U.S. EIA (EMM_EPMR_PTE_NUS_DPG) & BLS CPI-U via FRED (CPIAUCSL), "
     f"{date_span} ({len(df)} monthly observations)."
 )
+with st.expander("View Python Source Code"):
+    with open(__file__, "r", encoding="utf-8") as f:
+        st.code(f.read(), language="python")
