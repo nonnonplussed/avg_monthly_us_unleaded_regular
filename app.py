@@ -82,3 +82,6 @@ display_df = pd.DataFrame({
 })
 st.dataframe(display_df, use_container_width=True, hide_index=True)
 st.caption(f"Source: U.S. Energy Information Administration (EIA), {date_span} ({len(df)} monthly observations).")
+with st.expander("View Python Source Code"):
+    with open(__file__, "r", encoding="utf-8") as f:
+        st.code(f.read(), language="python")
