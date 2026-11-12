@@ -77,6 +77,19 @@ is_real = mode.startswith("Inflation-Adjusted")
 price_col = "Real_Price" if is_real else "Nominal_Price"
 y_label = f"Average Price ({latest_label} $)" if is_real else "Average Price ($)"
 
+# Overlay toggles placed directly below Price Basis
+ov_col1, ov_col2 = st.columns(2)
+with ov_col1:
+    show_seasonal_events = st.toggle(
+        "Overlay Seasonal Events (Blend Transitions & Summer Driving)",
+        value=False,
+    )
+with ov_col2:
+    show_annual_events = st.toggle(
+        "Overlay Annual Events (Hurricanes, Macro, OPEC/Shale, Geopolitics & SPR)",
+        value=False,
+    )
+
 tab_seasonal, tab_annual = st.tabs([
     "Seasonal Trends (By Month)",
     f"Annual Trends ({int(annual_df['Year'].min())}–{int(annual_df['Year'].max())})",
@@ -109,7 +122,8 @@ with tab_seasonal:
     summary["Pct_Jan_Fmt"] = summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format)
     summary["MoM_Pct_Fmt"] = summary["MoM_Pct"].map("{:+.1f}%".format)
 
-    y_max_m = float(max(2.85, np.ceil(summary["Mean"].max() * 2) / 2 + 0.25))
+    headroom_m = 0.55 if show_seasonal_events else 0.25
+    y_max_m = float(max(2.85, np.ceil(summary["Mean"].max() * 2) / 2 + headroom_m))
     y_grid_vals = [round(float(v), 1) for v in np.arange(0, y_max_m + 0.01, 0.5)]
     date_span = f"{monthly_df['Date'].min():%B %Y} - {monthly_df['Date'].max():%B %Y}"
     subtitle_m = f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
@@ -118,7 +132,7 @@ with tab_seasonal:
         ["Month", "Count", "Mean", "Avg_Price_Fmt", "Change_Jan_Fmt", "Pct_Jan_Fmt", "MoM_Pct_Fmt"]
     ].to_dict(orient="records")
 
-    seasonal_chart = (
+    seasonal_base = (
         alt.Chart(alt.Data(values=seasonal_records))
         .mark_bar()
         .encode(
@@ -177,22 +191,154 @@ with tab_seasonal:
                 alt.Tooltip("Count:Q", title="Observations"),
             ],
         )
-        .properties(
-            height=460,
-            title=alt.TitleParams(
-                text="Average Price of Unleaded Regular Gasoline by Month of the Year",
-                subtitle=subtitle_m,
-                anchor="start",
-                fontSize=17,
-                subtitleFontSize=13,
-                color="#111111",
-                subtitleColor="#333333",
-                offset=14,
-            ),
-        )
-        .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
     )
+
+    if show_seasonal_events:
+        mean_lookup = dict(zip(summary["Month"], summary["Mean"]))
+        offset_step = float(summary["Mean"].max()) * 0.035
+        span_y = float(max(mean_lookup[m] for m in ["May", "Jun", "Jul", "Aug"])) + offset_step * 2.6
+
+        seasonal_event_points = [
+            {
+                "Month": "Mar",
+                "y_pos": float(mean_lookup["Mar"]) + offset_step,
+                "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
+                "Tag": "Summer-Blend Switch",
+                "Detail": "EPA summer-blend transition & spring refinery maintenance (sharpest monthly rise)",
+            },
+            {
+                "Month": "Nov",
+                "y_pos": float(mean_lookup["Nov"]) + offset_step,
+                "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
+                "Tag": "Winter-Blend Switch",
+                "Detail": "Autumn switch back to lower-cost winter-blend gasoline (sharpest monthly drop)",
+            },
+            {
+                "Month": "May",
+                "y_pos": float(mean_lookup["May"]) + offset_step,
+                "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
+                "Tag": "",
+                "Detail": "Summer driving season begins around Memorial Day",
+            },
+            {
+                "Month": "Jun",
+                "y_pos": float(mean_lookup["Jun"]) + offset_step,
+                "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
+                "Tag": "Summer Driving Season (May–Aug)",
+                "Detail": "Peak summer highway travel demand & summer-grade fuel plateau",
+            },
+            {
+                "Month": "Jul",
+                "y_pos": float(mean_lookup["Jul"]) + offset_step,
+                "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
+                "Tag": "",
+                "Detail": "Mid-summer travel demand keeps refinery utilization elevated",
+            },
+            {
+                "Month": "Aug",
+                "y_pos": float(mean_lookup["Aug"]) + offset_step,
+                "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
+                "Tag": "",
+                "Detail": "Late-summer travel demand through Labor Day",
+            },
+        ]
+
+        span_records = [
+            {"Month": m, "span_y": span_y, "Detail": "Monthly Event 2: Summer Driving Season Demand (May–Aug)"}
+            for m in ["May", "Jun", "Jul", "Aug"]
+        ]
+
+        span_line = (
+            alt.Chart(alt.Data(values=span_records))
+            .mark_line(color="#d95f02", strokeWidth=2.4, strokeDash=[5, 3])
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("span_y:Q"),
+                tooltip=[alt.Tooltip("Detail:N", title="Seasonal Driver")],
+            )
+        )
+
+        event_markers = (
+            alt.Chart(alt.Data(values=seasonal_event_points))
+            .mark_point(shape="diamond", size=145, filled=True, stroke="white", strokeWidth=1.2)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("y_pos:Q"),
+                fill=alt.Fill(
+                    "Event_Type:N",
+                    scale=alt.Scale(
+                        domain=[
+                            "Monthly Event 1: Fuel Blend Transitions & Maintenance",
+                            "Monthly Event 2: Summer Driving Season Demand",
+                        ],
+                        range=["#e7298a", "#d95f02"],
+                    ),
+                    legend=alt.Legend(
+                        title="Seasonal Event Overlays (Hover Diamonds for Details)",
+                        orient="bottom",
+                        columns=1,
+                        titleFontSize=12,
+                        labelFontSize=11.5,
+                        labelColor="#222222",
+                        titleColor="#111111",
+                    ),
+                ),
+                tooltip=[
+                    alt.Tooltip("Month:N", title="Month"),
+                    alt.Tooltip("Event_Type:N", title="Category"),
+                    alt.Tooltip("Detail:N", title="Mechanism"),
+                ],
+            )
+        )
+
+        event_labels = (
+            alt.Chart(alt.Data(values=[r for r in seasonal_event_points if r["Tag"]]))
+            .mark_text(dy=-14, fontSize=10.5, fontWeight="bold", color="#111111")
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("y_pos:Q"),
+                text="Tag:N",
+            )
+        )
+
+        seasonal_chart = (
+            alt.layer(seasonal_base, span_line, event_markers, event_labels)
+            .resolve_scale(color="independent")
+            .properties(
+                height=475,
+                title=alt.TitleParams(
+                    text="Average Price of Unleaded Regular Gasoline by Month of the Year",
+                    subtitle=subtitle_m,
+                    anchor="start",
+                    fontSize=17,
+                    subtitleFontSize=13,
+                    color="#111111",
+                    subtitleColor="#333333",
+                    offset=14,
+                ),
+            )
+            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
+            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
+        )
+    else:
+        seasonal_chart = (
+            seasonal_base
+            .properties(
+                height=460,
+                title=alt.TitleParams(
+                    text="Average Price of Unleaded Regular Gasoline by Month of the Year",
+                    subtitle=subtitle_m,
+                    anchor="start",
+                    fontSize=17,
+                    subtitleFontSize=13,
+                    color="#111111",
+                    subtitleColor="#333333",
+                    offset=14,
+                ),
+            )
+            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
+            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
+        )
 
     st.altair_chart(seasonal_chart, width="stretch")
 
@@ -261,7 +407,8 @@ with tab_annual:
         ["Year_Str", "Price", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt", "Pct_Start_Fmt"]
     ].to_dict(orient="records")
 
-    y_max_a = float(np.ceil(ann["Price"].max() * 2) / 2 + 0.25)
+    headroom_a = 0.65 if show_annual_events else 0.25
+    y_max_a = float(np.ceil(ann["Price"].max() * 2) / 2 + headroom_a)
     tick_years = [str(y) for y in range(start_year, end_year + 1, 3)]
 
     base_annual = alt.Chart(alt.Data(values=ann_records)).encode(
@@ -303,7 +450,7 @@ with tab_annual:
         )
     )
 
-    points_layer = base_annual.mark_circle(size=75, color="#1f6f78", opacity=0.95).encode(
+    points_layer = base_annual.mark_circle(size=70, color="#1f6f78", opacity=0.95).encode(
         y=alt.Y("Price:Q"),
         tooltip=[
             alt.Tooltip("Year_Str:N", title="Year"),
@@ -326,24 +473,210 @@ with tab_annual:
         else f"Dashed line = {len(ann)}-year average (${mean_ann:.2f}/gal, Nominal) · Hover any year for details"
     )
 
-    annual_line_chart = (
-        alt.layer(area_layer, points_layer, mean_rule)
-        .properties(
-            height=390,
-            title=alt.TitleParams(
-                text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
-                subtitle=subtitle_a,
-                anchor="start",
-                fontSize=16.5,
-                subtitleFontSize=12.5,
-                color="#111111",
-                subtitleColor="#444444",
-                offset=14,
-            ),
+    if show_annual_events:
+        annual_events_meta = [
+            {
+                "Year": 1998,
+                "Category": "YoY Event 1: Macro & Pandemic Demand Shocks",
+                "Above_Label": "Asian Crisis",
+                "Below_Label": "",
+                "Event": "Asian Financial Crisis slumps global oil demand (34-year price low)",
+            },
+            {
+                "Year": 2000,
+                "Category": "YoY Event 2: OPEC+ & U.S. Shale Supply",
+                "Above_Label": "OPEC Cuts",
+                "Below_Label": "",
+                "Event": "Coordinated OPEC production cuts drive +30.6% annual price surge",
+            },
+            {
+                "Year": 2005,
+                "Category": "Monthly Event 3: Gulf Coast Hurricanes",
+                "Above_Label": "Katrina & Rita",
+                "Below_Label": "",
+                "Event": "Hurricanes Katrina & Rita knock Gulf Coast offshore rigs and refineries offline",
+            },
+            {
+                "Year": 2008,
+                "Category": "YoY Event 1: Macro & Pandemic Demand Shocks",
+                "Above_Label": "Financial Crisis",
+                "Below_Label": "",
+                "Event": "Global Financial Crisis spike in 2008 followed by -27.5% crash in 2009",
+            },
+            {
+                "Year": 2011,
+                "Category": "YoY Event 4: SPR Releases & Blending Policy",
+                "Above_Label": "",
+                "Below_Label": "SPR Release",
+                "Event": "Emergency Strategic Petroleum Reserve (SPR) drawdown & ethanol blending mandates",
+            },
+            {
+                "Year": 2012,
+                "Category": "YoY Event 3: Geopolitical Conflicts & Sanctions",
+                "Above_Label": "Libya / Iran Sanctions",
+                "Below_Label": "",
+                "Event": "Arab Spring, Libyan civil war supply outage & Iran oil sanctions",
+            },
+            {
+                "Year": 2015,
+                "Category": "YoY Event 2: OPEC+ & U.S. Shale Supply",
+                "Above_Label": "U.S. Shale Glut",
+                "Below_Label": "",
+                "Event": "U.S. shale oil boom & OPEC price war trigger -27.7% annual drop",
+            },
+            {
+                "Year": 2020,
+                "Category": "YoY Event 1: Macro & Pandemic Demand Shocks",
+                "Above_Label": "",
+                "Below_Label": "COVID-19",
+                "Event": "COVID-19 lockdown drop (-16.7%) followed by 2021 reopening surge (+38.7%)",
+            },
+            {
+                "Year": 2022,
+                "Category": "YoY Event 3: Geopolitical Conflicts & Sanctions",
+                "Above_Label": "Russia–Ukraine & SPR",
+                "Below_Label": "",
+                "Event": "Russia–Ukraine War supply rerouting cushioned by 180M-bbl SPR release",
+            },
+            {
+                "Year": 2024,
+                "Category": "YoY Event 2: OPEC+ & U.S. Shale Supply",
+                "Above_Label": "Non-OPEC Supply",
+                "Below_Label": "",
+                "Event": "Record U.S. & Americas oil output eases annual prices across 2023–2025",
+            },
+        ]
+
+        events_df = pd.DataFrame(annual_events_meta)
+        events_merged = pd.merge(
+            events_df,
+            ann[["Year", "Year_Str", "Price", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt"]],
+            on="Year",
+            how="inner",
         )
-        .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
-    )
+        event_records = events_merged[
+            [
+                "Year_Str",
+                "Category",
+                "Above_Label",
+                "Below_Label",
+                "Event",
+                "Price",
+                "Price_Fmt",
+                "YoY_Diff_Fmt",
+                "YoY_Pct_Fmt",
+            ]
+        ].to_dict(orient="records")
+
+        event_categories = [
+            "YoY Event 1: Macro & Pandemic Demand Shocks",
+            "YoY Event 2: OPEC+ & U.S. Shale Supply",
+            "YoY Event 3: Geopolitical Conflicts & Sanctions",
+            "YoY Event 4: SPR Releases & Blending Policy",
+            "Monthly Event 3: Gulf Coast Hurricanes",
+        ]
+        event_colors = ["#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02"]
+
+        event_rules = (
+            alt.Chart(alt.Data(values=event_records))
+            .mark_rule(strokeDash=[3, 3], strokeWidth=1.2, opacity=0.65)
+            .encode(
+                x=alt.X("Year_Str:O"),
+                color=alt.Color(
+                    "Category:N",
+                    scale=alt.Scale(domain=event_categories, range=event_colors),
+                    legend=None,
+                ),
+            )
+        )
+
+        event_diamonds = (
+            alt.Chart(alt.Data(values=event_records))
+            .mark_point(shape="diamond", size=145, filled=True, stroke="white", strokeWidth=1.2)
+            .encode(
+                x=alt.X("Year_Str:O"),
+                y=alt.Y("Price:Q"),
+                color=alt.Color(
+                    "Category:N",
+                    scale=alt.Scale(domain=event_categories, range=event_colors),
+                    legend=alt.Legend(
+                        title="Historical Event Overlays (Hover Diamonds for Details)",
+                        orient="bottom",
+                        columns=2,
+                        titleFontSize=12,
+                        labelFontSize=11,
+                        labelColor="#222222",
+                        titleColor="#111111",
+                    ),
+                ),
+                tooltip=[
+                    alt.Tooltip("Year_Str:N", title="Year"),
+                    alt.Tooltip("Category:N", title="Driver Category"),
+                    alt.Tooltip("Event:N", title="Event"),
+                    alt.Tooltip("Price_Fmt:N", title="Average Price"),
+                    alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
+                ],
+            )
+        )
+
+        above_texts = (
+            alt.Chart(alt.Data(values=[r for r in event_records if r["Above_Label"]]))
+            .mark_text(dy=-13, fontSize=9.8, fontWeight="bold", color="#111111")
+            .encode(
+                x=alt.X("Year_Str:O"),
+                y=alt.Y("Price:Q"),
+                text="Above_Label:N",
+            )
+        )
+
+        below_texts = (
+            alt.Chart(alt.Data(values=[r for r in event_records if r["Below_Label"]]))
+            .mark_text(dy=17, fontSize=9.8, fontWeight="bold", color="#111111")
+            .encode(
+                x=alt.X("Year_Str:O"),
+                y=alt.Y("Price:Q"),
+                text="Below_Label:N",
+            )
+        )
+
+        annual_line_chart = (
+            alt.layer(area_layer, points_layer, mean_rule, event_rules, event_diamonds, above_texts, below_texts)
+            .resolve_scale(color="independent")
+            .properties(
+                height=430,
+                title=alt.TitleParams(
+                    text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
+                    subtitle=subtitle_a,
+                    anchor="start",
+                    fontSize=16.5,
+                    subtitleFontSize=12.5,
+                    color="#111111",
+                    subtitleColor="#444444",
+                    offset=14,
+                ),
+            )
+            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
+            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
+        )
+    else:
+        annual_line_chart = (
+            alt.layer(area_layer, points_layer, mean_rule)
+            .properties(
+                height=390,
+                title=alt.TitleParams(
+                    text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
+                    subtitle=subtitle_a,
+                    anchor="start",
+                    fontSize=16.5,
+                    subtitleFontSize=12.5,
+                    color="#111111",
+                    subtitleColor="#444444",
+                    offset=14,
+                ),
+            )
+            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
+            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
+        )
 
     st.altair_chart(annual_line_chart, width="stretch")
 
