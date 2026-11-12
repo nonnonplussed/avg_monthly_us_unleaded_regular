@@ -54,7 +54,7 @@ mode = st.radio(
 is_real = mode.startswith("Inflation-Adjusted")
 price_col = "Real_Price" if is_real else "Nominal_Price"
 
-month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+month_names = ["01 Jan", "02 Feb", "03 Mar", "04 Apr", "05 May", "06 Jun", "07 Jul", "08 Aug", "09 Sep", "10 Oct", "11 Nov", "12 Dec"]
 df["Month_Num"] = df["Date"].dt.month
 
 summary = (
