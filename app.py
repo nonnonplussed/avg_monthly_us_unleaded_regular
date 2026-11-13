@@ -259,41 +259,87 @@ def median_ci_95(values: np.ndarray) -> tuple[float, float]:
     return (float(arr[lower_idx]), float(arr[upper_idx]))
 
 
+def _fetch_url_bytes(url: str, timeout: int = 20, retries: int = 2) -> bytes:
+    """Fetch raw bytes from an upstream EIA/FRED endpoint with lightweight retry resilience."""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    last_err: Exception | None = None
+    for _ in range(retries + 1):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as err:
+            last_err = err
+    assert last_err is not None
+    raise last_err
+
+
+def _append_ytd_annual_rows(
+    annual_df: pd.DataFrame,
+    monthly_df: pd.DataFrame,
+    val_col: str,
+) -> tuple[pd.DataFrame, list[int]]:
+    """
+    Synthesize year-to-date annual rows from monthly data when a new calendar year
+    has appeared in monthly surveys before EIA's annual file (DPGa.xls) updates.
+    """
+    if monthly_df.empty:
+        return annual_df, []
+    existing_years = set(annual_df["Year"].astype(int)) if not annual_df.empty else set()
+    min_ann_year = int(annual_df["Year"].min()) if not annual_df.empty else int(monthly_df["Year"].min())
+    ytd_rows: list[dict] = []
+    ytd_years: list[int] = []
+    for yr, grp in monthly_df.groupby("Year"):
+        yr_int = int(yr)
+        if yr_int >= min_ann_year and yr_int not in existing_years:
+            ytd_rows.append({"Year": yr_int, val_col: float(grp[val_col].mean())})
+            ytd_years.append(yr_int)
+    if ytd_rows:
+        annual_df = (
+            pd.concat([annual_df, pd.DataFrame(ytd_rows)], ignore_index=True)
+            .sort_values("Year")
+            .reset_index(drop=True)
+        )
+    return annual_df, sorted(ytd_years)
+
+
 @st.cache_data(ttl=86400)
 def load_base_benchmarks() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, float]:
     """Load CPI-U and U.S. national monthly/annual regular retail gasoline benchmarks."""
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    # 1. Monthly BLS CPI-U from FRED
-    cpi = pd.read_csv(FRED_CPI_URL, na_values=".")
+    # 1. Monthly BLS CPI-U from FRED (sorted chronologically before interpolation/fill)
+    cpi_bytes = _fetch_url_bytes(FRED_CPI_URL, timeout=20)
+    cpi = pd.read_csv(io.BytesIO(cpi_bytes), na_values=".")
     cpi.columns = ["Date", "CPI"]
     cpi["Date"] = pd.to_datetime(cpi["Date"])
-    cpi["CPI"] = pd.to_numeric(cpi["CPI"], errors="coerce").interpolate(method="linear").ffill()
+    cpi = cpi.sort_values("Date").reset_index(drop=True)
+    cpi["CPI"] = pd.to_numeric(cpi["CPI"], errors="coerce").interpolate(method="linear").ffill().bfill()
     cpi["YearMonth"] = cpi["Date"].dt.to_period("M")
     cpi["Year"] = cpi["Date"].dt.year
 
     # 2. U.S. National monthly regular retail gasoline prices
-    resp_m = requests.get(EIA_MONTHLY_US_URL, headers=headers, timeout=20)
-    resp_m.raise_for_status()
-    monthly_us = pd.read_excel(io.BytesIO(resp_m.content), sheet_name="Data 1", skiprows=2)
+    m_bytes = _fetch_url_bytes(EIA_MONTHLY_US_URL, timeout=20)
+    monthly_us = pd.read_excel(io.BytesIO(m_bytes), sheet_name="Data 1", skiprows=2)
     monthly_us.columns = ["Date", "US_Nominal"]
     monthly_us["Date"] = pd.to_datetime(monthly_us["Date"])
     monthly_us["US_Nominal"] = pd.to_numeric(monthly_us["US_Nominal"], errors="coerce")
-    monthly_us = monthly_us.dropna(subset=["Date", "US_Nominal"]).copy()
+    monthly_us = (
+        monthly_us.dropna(subset=["Date", "US_Nominal"])
+        .sort_values("Date")
+        .reset_index(drop=True)
+    )
     monthly_us["YearMonth"] = monthly_us["Date"].dt.to_period("M")
     monthly_us["Year"] = monthly_us["Date"].dt.year
 
+    # Merge CPI after chronological sort so ffill & latest_cpi always reflect the newest month
     monthly_us = pd.merge(monthly_us, cpi[["YearMonth", "CPI"]], on="YearMonth", how="left")
-    monthly_us["CPI"] = monthly_us["CPI"].ffill()
+    monthly_us["CPI"] = monthly_us["CPI"].ffill().bfill()
     latest_cpi = float(monthly_us["CPI"].iloc[-1])
     monthly_us["US_Real"] = monthly_us["US_Nominal"] * (latest_cpi / monthly_us["CPI"])
-    monthly_us = monthly_us.sort_values("Date").reset_index(drop=True)
 
     # 3. U.S. National annual regular retail gasoline prices
     try:
-        resp_a = requests.get(EIA_ANNUAL_US_URL, headers=headers, timeout=20)
-        resp_a.raise_for_status()
-        annual_us = pd.read_excel(io.BytesIO(resp_a.content), sheet_name="Data 1", skiprows=2)
+        a_bytes = _fetch_url_bytes(EIA_ANNUAL_US_URL, timeout=20)
+        annual_us = pd.read_excel(io.BytesIO(a_bytes), sheet_name="Data 1", skiprows=2)
         annual_us.columns = ["Date", "US_Nominal"]
         annual_us["Year"] = pd.to_datetime(annual_us["Date"]).dt.year
     except Exception:
@@ -303,11 +349,13 @@ def load_base_benchmarks() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, fl
 
     annual_us["US_Nominal"] = pd.to_numeric(annual_us["US_Nominal"], errors="coerce")
     annual_us = annual_us[["Year", "US_Nominal"]].dropna().sort_values("Year").reset_index(drop=True)
+    annual_us, ytd_years = _append_ytd_annual_rows(annual_us, monthly_us, "US_Nominal")
 
     annual_cpi = cpi.groupby("Year", as_index=False)["CPI"].mean()
     annual_us = pd.merge(annual_us, annual_cpi, on="Year", how="left")
-    annual_us["CPI"] = annual_us["CPI"].ffill()
+    annual_us["CPI"] = annual_us["CPI"].ffill().bfill()
     annual_us["US_Real"] = annual_us["US_Nominal"] * (latest_cpi / annual_us["CPI"])
+    annual_us["Is_YTD"] = annual_us["Year"].isin(ytd_years)
 
     return monthly_us, annual_us, cpi, latest_cpi
 
@@ -315,26 +363,25 @@ def load_base_benchmarks() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, fl
 @st.cache_data(ttl=86400)
 def load_eia_direct_series(geo_code: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Fetch monthly and annual Regular-grade XLS series for a PADD region or one of the 9 EIA states."""
-    headers = {"User-Agent": "Mozilla/5.0"}
     url_m = f"{EIA_HIST_BASE}/EMM_EPMR_PTE_{geo_code}_DPGm.xls"
     url_a = f"{EIA_HIST_BASE}/EMM_EPMR_PTE_{geo_code}_DPGa.xls"
 
-    resp_m = requests.get(url_m, headers=headers, timeout=20)
-    resp_m.raise_for_status()
-    df_m = pd.read_excel(io.BytesIO(resp_m.content), sheet_name="Data 1", skiprows=2)
+    m_bytes = _fetch_url_bytes(url_m, timeout=20)
+    df_m = pd.read_excel(io.BytesIO(m_bytes), sheet_name="Data 1", skiprows=2)
     df_m.columns = ["Date", "Geo_Nominal"]
     df_m["Date"] = pd.to_datetime(df_m["Date"])
     df_m["Geo_Nominal"] = pd.to_numeric(df_m["Geo_Nominal"], errors="coerce")
-    df_m = df_m.dropna(subset=["Date", "Geo_Nominal"]).copy()
+    df_m = df_m.dropna(subset=["Date", "Geo_Nominal"]).sort_values("Date").reset_index(drop=True)
     df_m["YearMonth"] = df_m["Date"].dt.to_period("M")
+    df_m["Year"] = df_m["Date"].dt.year
 
-    resp_a = requests.get(url_a, headers=headers, timeout=20)
-    resp_a.raise_for_status()
-    df_a = pd.read_excel(io.BytesIO(resp_a.content), sheet_name="Data 1", skiprows=2)
+    a_bytes = _fetch_url_bytes(url_a, timeout=20)
+    df_a = pd.read_excel(io.BytesIO(a_bytes), sheet_name="Data 1", skiprows=2)
     df_a.columns = ["Date", "Geo_Nominal"]
     df_a["Year"] = pd.to_datetime(df_a["Date"]).dt.year
     df_a["Geo_Nominal"] = pd.to_numeric(df_a["Geo_Nominal"], errors="coerce")
     df_a = df_a[["Year", "Geo_Nominal"]].dropna().sort_values("Year").reset_index(drop=True)
+    df_a, _ = _append_ytd_annual_rows(df_a, df_m, "Geo_Nominal")
 
     return df_m[["YearMonth", "Geo_Nominal"]], df_a
 
@@ -409,7 +456,7 @@ def get_geography_series(geo_meta: dict) -> tuple[pd.DataFrame, pd.DataFrame, st
         m_out["US_Benchmark_Nominal"] = m_out["Nominal_Price"]
         m_out["US_Benchmark_Real"] = m_out["Real_Price"]
 
-        a_out = annual_us[["Year", "CPI", "US_Nominal", "US_Real"]].copy()
+        a_out = annual_us[["Year", "CPI", "US_Nominal", "US_Real", "Is_YTD"]].copy()
         a_out = a_out.rename(columns={"US_Nominal": "Nominal_Price", "US_Real": "Real_Price"})
         a_out["US_Benchmark_Nominal"] = a_out["Nominal_Price"]
         a_out["US_Benchmark_Real"] = a_out["Real_Price"]
@@ -478,7 +525,7 @@ def get_geography_series(geo_meta: dict) -> tuple[pd.DataFrame, pd.DataFrame, st
     a_out = pd.merge(annual_us, padd_a.rename(columns={"Geo_Nominal": "Padd_Nominal"}), on="Year", how="left")
     if has_seds:
         a_out = pd.merge(a_out, seds_offsets[["Year", "State_vs_US_Offset"]], on="Year", how="left")
-        a_out["State_vs_US_Offset"] = a_out["State_vs_US_Offset"].ffill().bfill()
+        a_out["State_vs_US_Offset"] = a_out["State_vs_US_Offset"].ffill().bfill().fillna(0.0)
         a_out["Nominal_Price"] = a_out["US_Nominal"] + a_out["State_vs_US_Offset"]
     else:
         a_out["Nominal_Price"] = a_out["Padd_Nominal"].fillna(a_out["US_Nominal"])
@@ -1237,7 +1284,8 @@ with tab_annual:
     y_max_a = float(np.ceil(max_both_curves * 2) / 2 + 0.25)
     locked_y_scale_a = alt.Scale(domain=[0, y_max_a], nice=False, clamp=True)
     all_year_strs = ann["Year_Str"].tolist()
-    tick_years = [str(y) for y in range(start_year, end_year + 1, 3)]
+    tick_step = max(3, int(math.ceil((end_year - start_year + 1) / 14)))
+    tick_years = [str(y) for y in range(start_year, end_year + 1, tick_step)]
 
     shared_x_scale = alt.Scale(
         type="band",
@@ -1639,7 +1687,7 @@ with tab_annual:
             height=250,
             title=alt.TitleParams(
                 text=f"{geo_short} Year-over-Year Percentage Price Change ({start_year}–{end_year})",
-                subtitle="Annual percentage swing compared to the prior calendar year (1992 baseline has no prior year)",
+                subtitle=f"Annual percentage swing compared to the prior calendar year ({start_year} baseline has no prior year)",
                 anchor="start",
                 fontSize=16,
                 subtitleFontSize=12.5,
@@ -1677,10 +1725,16 @@ with tab_annual:
 
     st.dataframe(display_annual, height="content", width="stretch", hide_index=True)
 
+    ytd_yrs = sorted(ann.loc[ann.get("Is_YTD", pd.Series(False, index=ann.index)), "Year"].astype(int).tolist())
+    ytd_note = (
+        f" Note: {', '.join(map(str, ytd_yrs))} reflects year-to-date monthly averages pending EIA's annual survey release."
+        if ytd_yrs
+        else ""
+    )
     st.caption(
         f"Sources: [U.S. EIA Retail Gasoline Prices ({start_year}–{end_year})](https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_nus_a.htm), "
         f"[EIA SEDS State Price Estimates](https://www.eia.gov/state/seds/), & "
-        f"[BLS CPI-U via FRED (CPIAUCSL)]({FRED_CPI_URL})."
+        f"[BLS CPI-U via FRED (CPIAUCSL)]({FRED_CPI_URL}).{ytd_note}"
     )
 
 with st.expander("View Python Source Code"):
