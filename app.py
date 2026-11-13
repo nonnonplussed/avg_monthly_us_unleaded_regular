@@ -8,6 +8,34 @@ import streamlit as st
 
 st.set_page_config(page_title="U.S. Regular Gasoline Price Trends", layout="centered")
 
+st.markdown(
+    """
+    <style>
+    .st-key-central_tendency_toggle label[data-baseweb="checkbox"],
+    div[data-testid="stCheckbox"]:has(input[aria-label="Median"]) label[data-baseweb="checkbox"] {
+        display: inline-flex;
+        align-items: center;
+    }
+    .st-key-central_tendency_toggle label[data-baseweb="checkbox"]::before,
+    div[data-testid="stCheckbox"]:has(input[aria-label="Median"]) label[data-baseweb="checkbox"]::before {
+        content: "Mean";
+        color: #FFFFFF;
+        font-size: 0.875rem;
+        font-weight: 400;
+        line-height: 1.6;
+        margin-right: 0.5rem;
+        white-space: nowrap;
+    }
+    .st-key-central_tendency_toggle label[data-baseweb="checkbox"] p,
+    div[data-testid="stCheckbox"]:has(input[aria-label="Median"]) label[data-baseweb="checkbox"] p {
+        color: #FFFFFF !important;
+        white-space: nowrap !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 EIA_HIST_BASE = "https://www.eia.gov/dnav/pet/hist_xls"
 EIA_MONTHLY_US_URL = f"{EIA_HIST_BASE}/EMM_EPMR_PTE_NUS_DPGm.xls"
 EIA_ANNUAL_US_URL = f"{EIA_HIST_BASE}/EMM_EPMR_PTE_NUS_DPGa.xls"
@@ -477,26 +505,17 @@ with top_col2:
     )
 
 sub_col1, sub_col2, sub_col3, sub_col4 = st.columns(
-    [1.08, 1.04, 0.98, 1.25],
+    [1.02, 1.08, 0.98, 1.38],
     gap="small",
     vertical_alignment="center",
 )
 with sub_col1:
-    t_left, t_right = st.columns([0.36, 0.64], gap="small", vertical_alignment="center")
-    with t_left:
-        st.markdown(
-            "<div style='display:flex; align-items:center; justify-content:flex-end; "
-            "height:1.5rem; line-height:1.5rem; font-size:0.875rem; font-weight:400; "
-            "color:#FFFFFF; white-space:nowrap; margin:0; padding:0;'>Mean</div>",
-            unsafe_allow_html=True,
-        )
-    with t_right:
-        is_median = st.toggle(
-            "Median",
-            value=False,
-            key="central_tendency_toggle",
-            help="Left: Mean · Right: Median",
-        )
+    is_median = st.toggle(
+        "Median",
+        value=False,
+        key="central_tendency_toggle",
+        help="Left: Mean · Right: Median",
+    )
 with sub_col2:
     show_seasonal_events = st.toggle(
         "Seasonal Events",
@@ -552,7 +571,7 @@ tab_seasonal, tab_annual = st.tabs([
 # TAB 1: SEASONAL TRENDS BY CALENDAR MONTH
 # ==============================================================================
 with tab_seasonal:
-    month_names = ["01 Jan", "02 Feb", "03 Mar", "04 Apr", " 05 May", "06 Jun", "07 Jul", "08 Aug", "09 Sep", "10 Oct", "11 Nov", "12 Dec"]
+    month_names = ["01 Jan", "02 Feb", "03 Mar", "04 Apr", "05 May", "06 Jun", "07 Jul", "08 Aug", "09 Sep", "10 Oct", "11 Nov", "12 Dec"]
     month_full_names = [
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
@@ -702,7 +721,7 @@ with tab_seasonal:
                 scale=alt.Scale(domain=month_names, paddingInner=0.16, paddingOuter=0.12),
                 axis=alt.Axis(
                     labelAngle=0,
-                    labelFontSize=12,
+                    labelFontSize=11,
                     titleFontSize=13,
                     titlePadding=8,
                     labelColor="#333333",
@@ -819,48 +838,48 @@ with tab_seasonal:
 
         seasonal_event_points = [
             {
-                "Month": "Mar",
-                "anchor_top": _anchor("Mar"),
+                "Month": month_names[2],
+                "anchor_top": _anchor(month_names[2]),
                 "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Summer-Blend Switch",
                 "Detail": "EPA summer-blend transition & spring refinery maintenance (sharpest monthly rise)",
             },
             {
-                "Month": "Nov",
-                "anchor_top": _anchor("Nov"),
+                "Month": month_names[10],
+                "anchor_top": _anchor(month_names[10]),
                 "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Winter-Blend Switch",
                 "Detail": "Autumn switch back to lower-cost winter-blend gasoline (sharpest monthly drop)",
             },
             {
-                "Month": "May",
-                "anchor_top": _anchor("May"),
+                "Month": month_names[4],
+                "anchor_top": _anchor(month_names[4]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Summer driving season begins around Memorial Day",
             },
             {
-                "Month": "Jun",
-                "anchor_top": _anchor("Jun"),
+                "Month": month_names[5],
+                "anchor_top": _anchor(month_names[5]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Peak summer highway travel demand & summer-grade fuel plateau",
             },
             {
-                "Month": "Jul",
-                "anchor_top": _anchor("Jul"),
+                "Month": month_names[6],
+                "anchor_top": _anchor(month_names[6]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Mid-summer travel demand keeps refinery utilization elevated",
             },
             {
-                "Month": "Aug",
-                "anchor_top": _anchor("Aug"),
+                "Month": month_names[7],
+                "anchor_top": _anchor(month_names[7]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -880,7 +899,7 @@ with tab_seasonal:
 
         span_records = [
             {"Month": m, "span_y": y_summer_band, "Detail": "Monthly Event 2: Summer Driving Season Demand (May–Aug)"}
-            for m in ["May", "Jun", "Jul", "Aug"]
+            for m in month_names[4:8]
         ]
 
         span_line = (
@@ -894,7 +913,7 @@ with tab_seasonal:
         )
 
         span_label = (
-            alt.Chart(alt.Data(values=[{"Month": "Jun", "span_y": y_summer_band, "Text": "Summer Driving Season (May–Aug)"}]))
+            alt.Chart(alt.Data(values=[{"Month": month_names[5], "span_y": y_summer_band, "Text": "Summer Driving Season (May–Aug)"}]))
             .mark_text(dy=-11, dx=22, fontSize=10.5, fontWeight="bold", color="#111111")
             .encode(
                 x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
