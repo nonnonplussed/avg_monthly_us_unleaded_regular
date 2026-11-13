@@ -904,7 +904,7 @@ with tab_seasonal:
     })
     st.dataframe(pd.DataFrame(seasonal_table_dict), height="content", width="stretch", hide_index=True)
 
-_kind = selected_meta["kind"]
+    _kind = selected_meta["kind"]
     _padd_code = selected_meta["padd"]
     _us_m_link = "[U.S. EIA Retail Gasoline Prices (`NUS`)](https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_nus_m.htm)"
     _cpi_link = f"[BLS CPI-U via FRED (`CPIAUCSL`)]({FRED_CPI_URL})"
