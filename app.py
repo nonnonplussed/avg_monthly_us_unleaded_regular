@@ -70,6 +70,45 @@ st.markdown(
         margin-left: 0 !important;
         margin-right: 0 !important;
     }
+
+    /* Render view_tab_selector radio as clean underline tabs matching st.tabs */
+    .st-key-view_tab_selector [role="radiogroup"] {
+        display: flex !important;
+        flex-direction: row !important;
+        gap: 1.5rem !important;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.28) !important;
+        padding-bottom: 0 !important;
+        margin-bottom: 0.75rem !important;
+        width: 100% !important;
+    }
+    .st-key-view_tab_selector [role="radiogroup"] label {
+        background: transparent !important;
+        border: none !important;
+        border-bottom: 2px solid transparent !important;
+        border-radius: 0 !important;
+        padding: 0.45rem 0.1rem 0.55rem 0.1rem !important;
+        margin: 0 0 -1px 0 !important;
+        cursor: pointer !important;
+        transition: color 0.15s ease, border-color 0.15s ease !important;
+    }
+    .st-key-view_tab_selector [role="radiogroup"] label > div:first-child {
+        display: none !important;
+    }
+    .st-key-view_tab_selector [role="radiogroup"] label p {
+        font-size: 0.92rem !important;
+        font-weight: 500 !important;
+        margin: 0 !important;
+    }
+    .st-key-view_tab_selector [role="radiogroup"] label:has(input:checked) {
+        border-bottom: 2px solid #ff4b4b !important;
+    }
+    .st-key-view_tab_selector [role="radiogroup"] label:has(input:checked) p {
+        color: #ff4b4b !important;
+        font-weight: 600 !important;
+    }
+    .st-key-view_tab_selector [role="radiogroup"] label:hover p {
+        color: #ff4b4b !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -623,6 +662,67 @@ def _fmt_signed_pct(v: float) -> str:
 # TOP CONTROL BAR: GEOGRAPHY DROPDOWN, PRICE BASIS, CENTRAL TENDENCY & OVERLAYS
 # ==============================================================================
 geo_options, geo_meta_map = build_geography_options()
+base_monthly_us, base_annual_us, _, _ = load_base_benchmarks()
+latest_label = f"{base_monthly_us['Date'].max():%B %Y}"
+
+m_min_yr_global = int(base_monthly_us["Year"].min())
+m_max_yr_global = int(base_monthly_us["Year"].max())
+all_seasonal_label_global = f"{m_min_yr_global}–{m_max_yr_global} (All)"
+
+seasonal_tab_label = "Seasonal Trends (By Month)"
+annual_tab_label = f"Annual Trends ({int(base_annual_us['Year'].min())}–{int(base_annual_us['Year'].max())})"
+
+# Evaluate active view, geography, and seasonal year prior to rendering 95% CI toggle
+active_tab_pre = st.session_state.get("view_tab_selector", seasonal_tab_label)
+selected_geo_pre = st.session_state.get("geo_select", geo_options[0])
+is_us_pre = geo_meta_map.get(selected_geo_pre, {"kind": "US"})["kind"] == "US"
+selected_seasonal_yr_pre = st.session_state.get("seasonal_year_select", all_seasonal_label_global)
+is_single_seasonal_yr_pre = selected_seasonal_yr_pre != all_seasonal_label_global
+ci_locked_off = (active_tab_pre == seasonal_tab_label) and (not is_us_pre) and is_single_seasonal_yr_pre
+
+if "user_ci_pref" not in st.session_state:
+    st.session_state["user_ci_pref"] = True
+
+if ci_locked_off:
+    st.session_state["ci_toggle"] = False
+    st.markdown(
+        """
+        <style>
+        .st-key-ci_toggle {
+            position: relative !important;
+            cursor: not-allowed !important;
+        }
+        .st-key-ci_toggle * {
+            cursor: not-allowed !important;
+        }
+        .st-key-ci_toggle:hover::after {
+            content: "95% CI available only for monthly all-years seasonal trends";
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0;
+            background-color: #262730;
+            color: #FFFFFF;
+            border: 1px solid rgba(250, 250, 250, 0.2);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.78rem;
+            line-height: 1.35;
+            white-space: nowrap;
+            z-index: 9999;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+            pointer-events: none;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    if st.session_state.get("_was_ci_locked_off", False):
+        st.session_state["ci_toggle"] = st.session_state["user_ci_pref"]
+    elif "ci_toggle" not in st.session_state:
+        st.session_state["ci_toggle"] = st.session_state["user_ci_pref"]
+
+st.session_state["_was_ci_locked_off"] = ci_locked_off
 
 top_col1, top_col2 = st.columns([1.35, 1.65])
 with top_col1:
@@ -630,11 +730,10 @@ with top_col1:
         "Geography (U.S., PADD Region, or State):",
         options=geo_options,
         index=0,
+        key="geo_select",
         help="Type to search any of the 50 states + D.C., 8 PADD regions, or the U.S. national benchmark",
     )
 with top_col2:
-    base_monthly_us, _, _, _ = load_base_benchmarks()
-    latest_label = f"{base_monthly_us['Date'].max():%B %Y}"
     mode = st.radio(
         "Price Basis:",
         options=[f"Inflation-Adjusted ({latest_label} Dollars)", "Nominal Dollars (Unadjusted)"],
@@ -671,10 +770,16 @@ with sub_col3:
 with sub_col4:
     show_ci = st.toggle(
         "95% CI",
-        value=True,
         key="ci_toggle",
-        help="Adds the 95% confidence interval for the selected central tendency (Mean or Median)",
+        disabled=ci_locked_off,
+        help=(
+            "95% CI available only for monthly all-years seasonal trends"
+            if ci_locked_off
+            else "Adds the 95% confidence interval for the selected central tendency (Mean or Median)"
+        ),
     )
+    if not ci_locked_off:
+        st.session_state["user_ci_pref"] = show_ci
 
 selected_meta = geo_meta_map[selected_geo_label]
 is_us_benchmark = selected_meta["kind"] == "US"
@@ -703,15 +808,19 @@ if not is_us_benchmark:
         f"**Avg Offset vs. U.S.:** `{avg_offset_dollar:+.2f}/gal` (`{avg_offset_pct:+.1f}%`)"
     )
 
-tab_seasonal, tab_annual = st.tabs([
-    "Seasonal Trends (By Month)",
-    f"Annual Trends ({int(annual_df['Year'].min())}–{int(annual_df['Year'].max())})",
-])
+active_view_tab = st.radio(
+    "View:",
+    options=[seasonal_tab_label, annual_tab_label],
+    index=0,
+    horizontal=True,
+    label_visibility="collapsed",
+    key="view_tab_selector",
+)
 
 # ==============================================================================
 # TAB 1: SEASONAL TRENDS BY CALENDAR MONTH
 # ==============================================================================
-with tab_seasonal:
+if active_view_tab == seasonal_tab_label:
     month_names = ["01 Jan", "02 Feb", "03 Mar", "04 Apr", "05 May", "06 Jun", "07 Jul", "08 Aug", "09 Sep", "10 Oct", "11 Nov", "12 Dec"]
     month_full_names = [
         "January", "February", "March", "April", "May", "June",
@@ -812,11 +921,8 @@ with tab_seasonal:
     subtitle_parts_m = [
         f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
     ]
-    if show_ci:
-        if is_single_seasonal_year:
-            subtitle_parts_m.append("95% CI requires n > 1 per month")
-        else:
-            subtitle_parts_m.append(f"Error bars = 95% CI ({stat_noun.lower()})")
+    if show_ci and not is_single_seasonal_year:
+        subtitle_parts_m.append(f"Error bars = 95% CI ({stat_noun.lower()})")
     subtitle_m = " · ".join(subtitle_parts_m)
 
     seasonal_records = summary[
@@ -1181,7 +1287,7 @@ with tab_seasonal:
 # ==============================================================================
 # TAB 2: ANNUAL TRENDS (1992–PRESENT)
 # ==============================================================================
-with tab_annual:
+else:
     ann = annual_df.copy()
     ann["Year_Str"] = ann["Year"].astype(str)
 
@@ -1462,30 +1568,42 @@ with tab_annual:
             .mark_rule(color="#111111", strokeDash=[3, 3], strokeWidth=1.5, opacity=0.8)
             .encode(x=alt.X("Year_Str:O", scale=shared_x_scale))
         )
-        sel_halo = (
-            alt.Chart(sel_data)
-            .mark_circle(size=230, color="#d95f02", opacity=0.25)
-            .encode(x=alt.X("Year_Str:O", scale=shared_x_scale), y=alt.Y("Price:Q", scale=locked_y_scale_a))
-        )
-        sel_dot = (
-            alt.Chart(sel_data)
-            .mark_circle(size=120, color="#d95f02", stroke="white", strokeWidth=1.6)
-            .encode(
-                x=alt.X("Year_Str:O", scale=shared_x_scale),
-                y=alt.Y("Price:Q", scale=locked_y_scale_a),
-                tooltip=ann_tooltips,
+        if is_us_benchmark:
+            sel_halo = (
+                alt.Chart(sel_data)
+                .mark_circle(size=230, color="#d95f02", opacity=0.25)
+                .encode(x=alt.X("Year_Str:O", scale=shared_x_scale), y=alt.Y("Price:Q", scale=locked_y_scale_a))
             )
-        )
-        sel_label = (
-            alt.Chart(sel_data)
-            .mark_text(dy=-14, fontSize=11, fontWeight="bold", color="#111111")
-            .encode(
-                x=alt.X("Year_Str:O", scale=shared_x_scale),
-                y=alt.Y("Price:Q", scale=locked_y_scale_a),
-                text="Callout_Text:N",
+            sel_dot = (
+                alt.Chart(sel_data)
+                .mark_circle(size=120, color="#d95f02", stroke="white", strokeWidth=1.6)
+                .encode(
+                    x=alt.X("Year_Str:O", scale=shared_x_scale),
+                    y=alt.Y("Price:Q", scale=locked_y_scale_a),
+                    tooltip=ann_tooltips,
+                )
             )
-        )
-        annual_layers.extend([sel_vline, sel_halo, sel_dot, sel_label])
+            sel_label = (
+                alt.Chart(sel_data)
+                .mark_text(dy=-14, fontSize=11, fontWeight="bold", color="#111111")
+                .encode(
+                    x=alt.X("Year_Str:O", scale=shared_x_scale),
+                    y=alt.Y("Price:Q", scale=locked_y_scale_a),
+                    text="Callout_Text:N",
+                )
+            )
+            annual_layers.extend([sel_vline, sel_halo, sel_dot, sel_label])
+        else:
+            sel_dot = (
+                alt.Chart(sel_data)
+                .mark_circle(size=120, color="#111111", stroke="white", strokeWidth=1.6)
+                .encode(
+                    x=alt.X("Year_Str:O", scale=shared_x_scale),
+                    y=alt.Y("Price:Q", scale=locked_y_scale_a),
+                    tooltip=ann_tooltips,
+                )
+            )
+            annual_layers.extend([sel_vline, sel_dot])
 
     basis_tag = f"{latest_label} Dollars" if is_real else "Nominal"
     us_note = " · Dotted gray curve = U.S. national benchmark" if not is_us_benchmark else ""
