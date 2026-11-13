@@ -1685,4 +1685,4 @@ with tab_annual:
 
 with st.expander("View Python Source Code"):
     with open(__file__, "r", encoding="utf-8") as f:
-        st.code(f.r
+        st.code(f.read(), language="python")
