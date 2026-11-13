@@ -537,8 +537,9 @@ with top_col2:
     latest_label = f"{base_monthly_us['Date'].max():%B %Y}"
     mode = st.radio(
         "Price Basis:",
-        options=["Nominal Dollars (Unadjusted)", f"Inflation-Adjusted ({latest_label} Dollars)"],
-        horizontal=True,
+        options=[f"Inflation-Adjusted ({latest_label} Dollars)", "Nominal Dollars (Unadjusted)"],
+        index=0,
+        horizontal=False,
     )
 
 sub_col1, sub_col2, sub_col3, sub_col4 = st.columns(
@@ -624,7 +625,7 @@ with tab_seasonal:
     m_min_yr = int(monthly_df["Year"].min())
     m_max_yr = int(monthly_df["Year"].max())
     all_seasonal_label = f"{m_min_yr}–{m_max_yr} (All)"
-    seasonal_year_options = [all_seasonal_label] + [str(y) for y in range(m_min_yr, m_max_yr + 1)]
+    seasonal_year_options = [all_seasonal_label] + [str(y) for y in range(m_max_yr, m_min_yr - 1, -1)]
 
     s_yr_col, _ = st.columns([1.25, 2.75])
     with s_yr_col:
@@ -1100,7 +1101,7 @@ with tab_annual:
     a_min_yr = int(ann["Year"].min())
     a_max_yr = int(ann["Year"].max())
     all_annual_label = f"{a_min_yr}–{a_max_yr} (All)"
-    annual_year_options = [all_annual_label] + [str(y) for y in range(a_min_yr, a_max_yr + 1)]
+    annual_year_options = [all_annual_label] + [str(y) for y in range(a_max_yr, a_min_yr - 1, -1)]
 
     a_yr_col, _ = st.columns([1.25, 2.75])
     with a_yr_col:
@@ -1684,4 +1685,4 @@ with tab_annual:
 
 with st.expander("View Python Source Code"):
     with open(__file__, "r", encoding="utf-8") as f:
-        st.code(f.read(), language="python")
+        st.code(f.r
