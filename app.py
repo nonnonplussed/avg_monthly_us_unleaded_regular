@@ -1,4 +1,5 @@
 import io
+import math
 import requests
 import pandas as pd
 import numpy as np
@@ -11,6 +12,59 @@ EIA_MONTHLY_URL = "https://www.eia.gov/dnav/pet/hist_xls/EMM_EPMR_PTE_NUS_DPGm.x
 EIA_ANNUAL_URL = "https://www.eia.gov/dnav/pet/hist_xls/EMM_EPMR_PTE_NUS_DPGa.xls"
 LOCAL_ANNUAL_CSV = "U.S._Regular_All_Formulations_Retail_Gasoline_Prices.csv"
 FRED_CPI_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"
+
+
+def t_crit_975(df: int) -> float:
+    """Two-sided 95% (q=0.975) Student-t critical value with pure-Python fallback."""
+    if df <= 0:
+        return 1.959963984540054
+    try:
+        from scipy.stats import t
+        return float(t.ppf(0.975, df=df))
+    except Exception:
+        z = 1.959963984540054
+        g1 = (z**3 + z) / 4.0
+        g2 = (5 * z**5 + 16 * z**3 + 3 * z) / 96.0
+        g3 = (3 * z**7 + 19 * z**5 + 17 * z**3 - 15 * z) / 384.0
+        g4 = (79 * z**9 + 776 * z**7 + 1482 * z**5 - 1920 * z**3 - 945 * z) / 92160.0
+        return z + g1 / df + g2 / (df**2) + g3 / (df**3) + g4 / (df**4)
+
+
+def mean_ci_95(values: np.ndarray) -> tuple[float, float]:
+    """95% Student-t confidence interval for the sample mean."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    n = len(arr)
+    if n == 0:
+        return (np.nan, np.nan)
+    m = float(np.mean(arr))
+    if n == 1:
+        return (m, m)
+    se = float(np.std(arr, ddof=1)) / math.sqrt(n)
+    margin = t_crit_975(n - 1) * se
+    return (m - margin, m + margin)
+
+
+def median_ci_95(values: np.ndarray) -> tuple[float, float]:
+    """Exact distribution-free 95% confidence interval for the median via Binomial(n, 0.5) order statistics."""
+    arr = np.sort(np.asarray(values, dtype=float))
+    arr = arr[~np.isnan(arr)]
+    n = len(arr)
+    if n == 0:
+        return (np.nan, np.nan)
+    if n == 1:
+        return (float(arr[0]), float(arr[0]))
+    half_pow = 0.5 ** n
+    cum = 0.0
+    lower_idx = 0
+    for k in range(n // 2 + 1):
+        p_k = math.comb(n, k) * half_pow
+        if cum + p_k > 0.025:
+            lower_idx = k
+            break
+        cum += p_k
+    upper_idx = max(lower_idx, min(n - 1, n - 1 - lower_idx))
+    return (float(arr[lower_idx]), float(arr[upper_idx]))
 
 
 @st.cache_data(ttl=86400)  # Refresh cached data once every 24 hours
@@ -86,21 +140,30 @@ is_real = mode.startswith("Inflation-Adjusted")
 is_median = stat_mode == "Median"
 price_col = "Real_Price" if is_real else "Nominal_Price"
 agg_func = "median" if is_median else "mean"
+ci_func = median_ci_95 if is_median else mean_ci_95
 stat_noun = "Median" if is_median else "Mean"
 y_label_seasonal = f"{stat_noun} Price ({latest_label} $)" if is_real else f"{stat_noun} Price ($)"
 y_label_annual = f"Mean Price ({latest_label} $)" if is_real else "Mean Price ($)"
 
-# Overlay toggles placed directly below Price Basis & Central Tendency
-ov_col1, ov_col2 = st.columns(2)
+# Category / overlay toggles placed directly below Price Basis & Central Tendency
+ov_col1, ov_col2, ov_col3 = st.columns(3)
 with ov_col1:
     show_seasonal_events = st.toggle(
-        "Overlay Seasonal Events (Blend Transitions & Summer Driving)",
+        "Overlay Seasonal Events",
         value=False,
+        help="Blend transitions (Mar, Nov) & summer driving season (May–Aug)",
     )
 with ov_col2:
     show_annual_events = st.toggle(
-        "Overlay Annual Events (Hurricanes, Macro, OPEC/Shale, Geopolitics & SPR)",
+        "Overlay Annual Events",
         value=False,
+        help="Hurricanes, macro shocks, OPEC/shale, geopolitics & SPR releases",
+    )
+with ov_col3:
+    show_ci = st.toggle(
+        "Show 95% Confidence Interval",
+        value=False,
+        help="Adds the 95% confidence interval for the selected central tendency (Mean or Median)",
     )
 
 tab_seasonal, tab_annual = st.tabs([
@@ -122,6 +185,25 @@ with tab_seasonal:
     summary = monthly_df.groupby("Month_Num")[price_col].agg(Count="count", Value=agg_func).reindex(range(1, 13))
     summary["Month"] = month_names
 
+    # Compute 95% CI bounds for each calendar month for both Mean and Median (to lock y-axis scale)
+    ci_lows, ci_highs = [], []
+    max_ci_both = 0.0
+    for m_idx in range(1, 13):
+        m_vals = monthly_df.loc[monthly_df["Month_Num"] == m_idx, price_col].to_numpy()
+        lo_mean, hi_mean = mean_ci_95(m_vals)
+        lo_med, hi_med = median_ci_95(m_vals)
+        max_ci_both = max(max_ci_both, hi_mean, hi_med)
+        if is_median:
+            ci_lows.append(lo_med)
+            ci_highs.append(hi_med)
+        else:
+            ci_lows.append(lo_mean)
+            ci_highs.append(hi_mean)
+
+    summary["CI_Low"] = ci_lows
+    summary["CI_High"] = ci_highs
+    summary["CI_Fmt"] = [f"${lo:.2f} – ${hi:.2f}" for lo, hi in zip(ci_lows, ci_highs)]
+
     jan_val = summary.loc[1, "Value"]
     summary["Change_vs_Jan"] = summary["Value"] - jan_val
     summary["Pct_Change_vs_Jan"] = (summary["Change_vs_Jan"] / jan_val) * 100
@@ -135,23 +217,47 @@ with tab_seasonal:
     summary["Pct_Jan_Fmt"] = summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format)
     summary["MoM_Pct_Fmt"] = summary["MoM_Pct"].map("{:+.1f}%".format)
 
-    # Lock y-axis domain across both Mean/Median and Overlay On/Off so bar scale never shifts
-    max_across_stats = float(
-        max(
-            monthly_df.groupby("Month_Num")[price_col].mean().max(),
-            monthly_df.groupby("Month_Num")[price_col].median().max(),
-        )
-    )
-    y_max_m = float(max(2.95, np.ceil(max_across_stats * 2) / 2 + 0.45))
+    # Lock y-axis domain across Mean/Median, 95% CI On/Off, and Overlay On/Off so bar scale never shifts
+    y_max_m = float(max(3.25, np.ceil(max_ci_both * 2) / 2 + 0.55))
     y_grid_vals = [round(float(v), 1) for v in np.arange(0, y_max_m + 0.01, 0.5)]
     locked_y_scale_m = alt.Scale(domain=[0, y_max_m], nice=False, clamp=True)
 
     date_span = f"{monthly_df['Date'].min():%B %Y} - {monthly_df['Date'].max():%B %Y}"
-    subtitle_m = f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
+    subtitle_parts_m = []
+    if is_real:
+        subtitle_parts_m.append(f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)")
+    else:
+        subtitle_parts_m.append(date_span)
+    if show_ci:
+        subtitle_parts_m.append(f"Error bars = 95% CI ({stat_noun.lower()})")
+    subtitle_m = " · ".join(subtitle_parts_m)
 
     seasonal_records = summary[
-        ["Month", "Count", "Value", "Val_Price_Fmt", "Change_Jan_Fmt", "Pct_Jan_Fmt", "MoM_Pct_Fmt"]
+        [
+            "Month",
+            "Count",
+            "Value",
+            "CI_Low",
+            "CI_High",
+            "CI_Fmt",
+            "Val_Price_Fmt",
+            "Change_Jan_Fmt",
+            "Pct_Jan_Fmt",
+            "MoM_Pct_Fmt",
+        ]
     ].to_dict(orient="records")
+
+    seasonal_tooltips = [
+        alt.Tooltip("Val_Price_Fmt:N", title=f"{stat_noun} Price"),
+    ]
+    if show_ci:
+        seasonal_tooltips.append(alt.Tooltip("CI_Fmt:N", title=f"95% CI ({stat_noun})"))
+    seasonal_tooltips.extend([
+        alt.Tooltip("Change_Jan_Fmt:N", title="Change vs. January"),
+        alt.Tooltip("Pct_Jan_Fmt:N", title="% Change vs. January"),
+        alt.Tooltip("MoM_Pct_Fmt:N", title="% Change vs. Prev. Month"),
+        alt.Tooltip("Count:Q", title="Observations"),
+    ])
 
     seasonal_base = (
         alt.Chart(alt.Data(values=seasonal_records))
@@ -205,29 +311,92 @@ with tab_seasonal:
                     titleColor="#111111",
                 ),
             ),
-            tooltip=[
-                alt.Tooltip("Val_Price_Fmt:N", title=f"{stat_noun} Price"),
-                alt.Tooltip("Change_Jan_Fmt:N", title="Change vs. January"),
-                alt.Tooltip("Pct_Jan_Fmt:N", title="% Change vs. January"),
-                alt.Tooltip("MoM_Pct_Fmt:N", title="% Change vs. Prev. Month"),
-                alt.Tooltip("Count:Q", title="Observations"),
-            ],
+            tooltip=seasonal_tooltips,
         )
     )
 
-    if show_seasonal_events:
-        val_lookup = dict(zip(summary["Month"], summary["Value"]))
-        max_bar = float(summary["Value"].max())
-        headroom = y_max_m - max_bar
+    seasonal_layers = [seasonal_base]
 
-        # Position overlays high in the white space above the bars with subtle leader ticks
-        y_summer_band = max_bar + headroom * 0.62
-        y_blend_marker = max_bar + headroom * 0.30
+    if show_ci:
+        ci_data = alt.Data(values=seasonal_records)
+        ci_stem_halo = (
+            alt.Chart(ci_data)
+            .mark_rule(color="white", strokeWidth=3.6, opacity=0.85)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("CI_Low:Q", scale=locked_y_scale_m),
+                y2=alt.Y2("CI_High:Q"),
+            )
+        )
+        ci_stem = (
+            alt.Chart(ci_data)
+            .mark_rule(color="#111111", strokeWidth=1.8)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("CI_Low:Q", scale=locked_y_scale_m),
+                y2=alt.Y2("CI_High:Q"),
+                tooltip=[
+                    alt.Tooltip("Month:N", title="Month"),
+                    alt.Tooltip("Val_Price_Fmt:N", title=f"{stat_noun} Price"),
+                    alt.Tooltip("CI_Fmt:N", title=f"95% CI ({stat_noun})"),
+                ],
+            )
+        )
+        ci_cap_top_halo = (
+            alt.Chart(ci_data)
+            .mark_tick(color="white", thickness=3.6, size=14, opacity=0.85)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("CI_High:Q", scale=locked_y_scale_m),
+            )
+        )
+        ci_cap_top = (
+            alt.Chart(ci_data)
+            .mark_tick(color="#111111", thickness=1.8, size=12)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("CI_High:Q", scale=locked_y_scale_m),
+            )
+        )
+        ci_cap_bot_halo = (
+            alt.Chart(ci_data)
+            .mark_tick(color="white", thickness=3.6, size=14, opacity=0.85)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("CI_Low:Q", scale=locked_y_scale_m),
+            )
+        )
+        ci_cap_bot = (
+            alt.Chart(ci_data)
+            .mark_tick(color="#111111", thickness=1.8, size=12)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("CI_Low:Q", scale=locked_y_scale_m),
+            )
+        )
+        seasonal_layers.extend([
+            ci_stem_halo,
+            ci_stem,
+            ci_cap_top_halo,
+            ci_cap_top,
+            ci_cap_bot_halo,
+            ci_cap_bot,
+        ])
+
+    if show_seasonal_events:
+        top_ref_col = "CI_High" if show_ci else "Value"
+        top_lookup = dict(zip(summary["Month"], summary[top_ref_col]))
+        max_ci_current = float(summary["CI_High"].max())
+        headroom = y_max_m - max_ci_current
+
+        # Position overlays high in the white space above the upper CI whiskers so there is zero collision
+        y_summer_band = max_ci_current + headroom * 0.64
+        y_blend_marker = max_ci_current + headroom * 0.30
 
         seasonal_event_points = [
             {
                 "Month": "Mar",
-                "bar_top": float(val_lookup["Mar"]),
+                "anchor_top": float(top_lookup["Mar"]),
                 "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Summer-Blend Switch",
@@ -235,7 +404,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Nov",
-                "bar_top": float(val_lookup["Nov"]),
+                "anchor_top": float(top_lookup["Nov"]),
                 "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Winter-Blend Switch",
@@ -243,7 +412,7 @@ with tab_seasonal:
             },
             {
                 "Month": "May",
-                "bar_top": float(val_lookup["May"]),
+                "anchor_top": float(top_lookup["May"]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -251,7 +420,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Jun",
-                "bar_top": float(val_lookup["Jun"]),
+                "anchor_top": float(top_lookup["Jun"]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -259,7 +428,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Jul",
-                "bar_top": float(val_lookup["Jul"]),
+                "anchor_top": float(top_lookup["Jul"]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -267,7 +436,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Aug",
-                "bar_top": float(val_lookup["Aug"]),
+                "anchor_top": float(top_lookup["Aug"]),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -280,7 +449,7 @@ with tab_seasonal:
             .mark_rule(color="#888888", strokeDash=[2, 2], strokeWidth=1.1)
             .encode(
                 x=alt.X("Month:N", sort=month_names),
-                y=alt.Y("bar_top:Q", scale=locked_y_scale_m),
+                y=alt.Y("anchor_top:Q", scale=locked_y_scale_m),
                 y2=alt.Y2("y_pos:Q"),
             )
         )
@@ -345,56 +514,43 @@ with tab_seasonal:
             )
         )
 
-        seasonal_chart = (
-            alt.layer(seasonal_base, leader_lines, span_line, span_label, event_markers, event_labels)
-            .resolve_scale(color="independent", y="shared")
-            .properties(
-                height=460,
-                title=alt.TitleParams(
-                    text=f"{stat_noun} Price of Unleaded Regular Gasoline by Month of the Year",
-                    subtitle=subtitle_m,
-                    anchor="start",
-                    fontSize=17,
-                    subtitleFontSize=13,
-                    color="#111111",
-                    subtitleColor="#333333",
-                    offset=14,
-                ),
-            )
-            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
+        seasonal_layers.extend([leader_lines, span_line, span_label, event_markers, event_labels])
+
+    seasonal_chart = (
+        alt.layer(*seasonal_layers)
+        .resolve_scale(color="independent", y="shared")
+        .properties(
+            height=460,
+            title=alt.TitleParams(
+                text=f"{stat_noun} Price of Unleaded Regular Gasoline by Month of the Year",
+                subtitle=subtitle_m,
+                anchor="start",
+                fontSize=17,
+                subtitleFontSize=13,
+                color="#111111",
+                subtitleColor="#333333",
+                offset=14,
+            ),
         )
-    else:
-        seasonal_chart = (
-            seasonal_base
-            .properties(
-                height=460,
-                title=alt.TitleParams(
-                    text=f"{stat_noun} Price of Unleaded Regular Gasoline by Month of the Year",
-                    subtitle=subtitle_m,
-                    anchor="start",
-                    fontSize=17,
-                    subtitleFontSize=13,
-                    color="#111111",
-                    subtitleColor="#333333",
-                    offset=14,
-                ),
-            )
-            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
-        )
+        .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
+        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
+    )
 
     st.altair_chart(seasonal_chart, width="stretch")
 
-    display_seasonal = pd.DataFrame({
+    seasonal_table_dict = {
         "Month": summary["Month"],
         "Observations": summary["Count"],
         f"{stat_noun} Price": summary["Val_Price_Fmt"],
+    }
+    if show_ci:
+        seasonal_table_dict[f"95% CI ({stat_noun})"] = summary["CI_Fmt"]
+    seasonal_table_dict.update({
         "Change vs. January": summary["Change_Jan_Fmt"],
         "% Change vs. January": summary["Pct_Jan_Fmt"],
         "% Change vs. Prev. Month": summary["MoM_Pct_Fmt"],
     })
-    st.dataframe(display_seasonal, height="content", width="stretch", hide_index=True)
+    st.dataframe(pd.DataFrame(seasonal_table_dict), height="content", width="stretch", hide_index=True)
 
     st.caption(
         f"Sources: [U.S. EIA Monthly Retail Gasoline Prices (EMM_EPMR_PTE_NUS_DPG, XLS)]({EIA_MONTHLY_URL}) & "
@@ -424,7 +580,11 @@ with tab_annual:
     ann["Pct_Start_Fmt"] = ann["Pct_vs_Start"].map("{:+.1f}%".format)
     ann["Direction"] = np.where(ann["YoY_Pct"].fillna(0) >= 0, "Increase", "Decrease")
 
-    central_ann = float(ann["Price"].median()) if is_median else float(ann["Price"].mean())
+    ann_prices_arr = ann["Price"].to_numpy()
+    central_ann = float(np.median(ann_prices_arr)) if is_median else float(np.mean(ann_prices_arr))
+    ci_low_ann, ci_high_ann = ci_func(ann_prices_arr)
+    ci_ann_fmt = f"${ci_low_ann:.2f}–${ci_high_ann:.2f}"
+
     central_word_title = "Median" if is_median else "Mean"
     central_word_lower = "median" if is_median else "mean"
 
@@ -436,7 +596,7 @@ with tab_annual:
     col1.metric(
         f"{len(ann)}-Year {central_word_title}",
         f"${central_ann:.2f}",
-        f"{start_year}–{end_year} {central_word_lower}",
+        f"95% CI: {ci_ann_fmt}" if show_ci else f"{start_year}–{end_year} {central_word_lower}",
     )
     col2.metric(
         f"Peak Year ({int(peak_row['Year'])})",
@@ -527,11 +687,43 @@ with tab_annual:
         .encode(y=alt.Y("central_val:Q", scale=locked_y_scale_a))
     )
 
-    subtitle_a = (
-        f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal, {latest_label} Dollars) · Hover any year for details"
-        if is_real
-        else f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal, Nominal) · Hover any year for details"
-    )
+    annual_layers = []
+
+    # Optional 95% confidence interval band around the selected 34-year Mean or Median
+    if show_ci:
+        ci_band_df = [{"ci_low": ci_low_ann, "ci_high": ci_high_ann}]
+        ci_band_rect = (
+            alt.Chart(alt.Data(values=ci_band_df))
+            .mark_rect(color="#555555", opacity=0.11)
+            .encode(
+                y=alt.Y("ci_low:Q", scale=locked_y_scale_a),
+                y2=alt.Y2("ci_high:Q"),
+            )
+        )
+        ci_upper_rule = (
+            alt.Chart(alt.Data(values=[{"val": ci_high_ann}]))
+            .mark_rule(color="#666666", strokeDash=[2, 3], strokeWidth=1.0, opacity=0.75)
+            .encode(y=alt.Y("val:Q", scale=locked_y_scale_a))
+        )
+        ci_lower_rule = (
+            alt.Chart(alt.Data(values=[{"val": ci_low_ann}]))
+            .mark_rule(color="#666666", strokeDash=[2, 3], strokeWidth=1.0, opacity=0.75)
+            .encode(y=alt.Y("val:Q", scale=locked_y_scale_a))
+        )
+        annual_layers.extend([ci_band_rect, ci_upper_rule, ci_lower_rule])
+
+    annual_layers.extend([area_layer, points_layer, central_rule])
+
+    basis_tag = f"{latest_label} Dollars" if is_real else "Nominal"
+    if show_ci:
+        subtitle_a = (
+            f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal; "
+            f"shaded 95% CI: {ci_ann_fmt}, {basis_tag}) · Hover any year for details"
+        )
+    else:
+        subtitle_a = (
+            f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal, {basis_tag}) · Hover any year for details"
+        )
 
     if show_annual_events:
         annual_events_meta = [
@@ -691,43 +883,26 @@ with tab_annual:
             )
         )
 
-        annual_line_chart = (
-            alt.layer(area_layer, points_layer, central_rule, event_rules, event_diamonds, above_texts, below_texts)
-            .resolve_scale(color="independent", y="shared")
-            .properties(
-                width=640,
-                height=370,
-                title=alt.TitleParams(
-                    text=f"Annual Mean U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
-                    subtitle=subtitle_a,
-                    anchor="start",
-                    fontSize=16.5,
-                    subtitleFontSize=12.5,
-                    color="#111111",
-                    subtitleColor="#444444",
-                    offset=14,
-                ),
-            )
+        annual_layers.extend([event_rules, event_diamonds, above_texts, below_texts])
+
+    annual_line_chart = (
+        alt.layer(*annual_layers)
+        .resolve_scale(color="independent", y="shared")
+        .properties(
+            width=640,
+            height=370,
+            title=alt.TitleParams(
+                text=f"Annual Mean U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
+                subtitle=subtitle_a,
+                anchor="start",
+                fontSize=16.5,
+                subtitleFontSize=12.5,
+                color="#111111",
+                subtitleColor="#444444",
+                offset=14,
+            ),
         )
-    else:
-        annual_line_chart = (
-            alt.layer(area_layer, points_layer, central_rule)
-            .resolve_scale(y="shared")
-            .properties(
-                width=640,
-                height=370,
-                title=alt.TitleParams(
-                    text=f"Annual Mean U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
-                    subtitle=subtitle_a,
-                    anchor="start",
-                    fontSize=16.5,
-                    subtitleFontSize=12.5,
-                    color="#111111",
-                    subtitleColor="#444444",
-                    offset=14,
-                ),
-            )
-        )
+    )
 
     # Bottom bar chart uses the exact same shared band x-scale and vconcat alignment
     yoy_all = ann.copy()
