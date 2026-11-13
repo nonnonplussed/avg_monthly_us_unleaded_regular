@@ -672,10 +672,8 @@ all_seasonal_label_global = f"{m_min_yr_global}–{m_max_yr_global} (All)"
 seasonal_tab_label = "Seasonal Trends (By Month)"
 annual_tab_label = f"Annual Trends ({int(base_annual_us['Year'].min())}–{int(base_annual_us['Year'].max())})"
 
-# Evaluate active view, geography, and seasonal year prior to rendering 95% CI toggle
+# Evaluate active view and seasonal year prior to rendering 95% CI toggle
 active_tab_pre = st.session_state.get("view_tab_selector", seasonal_tab_label)
-selected_geo_pre = st.session_state.get("geo_select", geo_options[0])
-is_us_pre = geo_meta_map.get(selected_geo_pre, {"kind": "US"})["kind"] == "US"
 selected_seasonal_yr_pre = st.session_state.get("seasonal_year_select", all_seasonal_label_global)
 is_single_seasonal_yr_pre = selected_seasonal_yr_pre != all_seasonal_label_global
 ci_locked_off = (active_tab_pre == seasonal_tab_label) and is_single_seasonal_yr_pre
@@ -688,8 +686,16 @@ if ci_locked_off:
     st.markdown(
         """
         <style>
+        div[data-testid="stHorizontalBlock"]:has(.st-key-ci_toggle),
+        div[data-testid="stColumn"]:has(.st-key-ci_toggle),
+        div[data-testid="stVerticalBlock"]:has(.st-key-ci_toggle),
         .st-key-ci_toggle {
+            overflow: visible !important;
             position: relative !important;
+            z-index: 9999 !important;
+        }
+        .st-key-ci_toggle {
+            pointer-events: auto !important;
             cursor: not-allowed !important;
         }
         .st-key-ci_toggle * {
@@ -698,7 +704,7 @@ if ci_locked_off:
         .st-key-ci_toggle:hover::after {
             content: "95% CI requires All years in Seasonal view";
             position: absolute;
-            top: calc(100% + 6px);
+            top: calc(100% + 8px);
             right: 0;
             background-color: #262730;
             color: #FFFFFF;
@@ -708,7 +714,7 @@ if ci_locked_off:
             font-size: 0.78rem;
             line-height: 1.35;
             white-space: nowrap;
-            z-index: 9999;
+            z-index: 10000;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
             pointer-events: none;
         }
@@ -1695,15 +1701,23 @@ else:
                 "Below_Label": "",
                 "Event": "Record U.S. & Americas oil output eases annual prices across 2023–2025",
             },
+            {
+                "Year": 2026,
+                "Category": "YoY Event 3: Geopolitical Conflicts & Sanctions",
+                "Above_Label": "Iran War",
+                "Below_Label": "",
+                "Event": "U.S.–Israel war with Iran (begun Feb 28, 2026) & Strait of Hormuz crisis trigger sharp oil and pump price surge",
+            },
         ]
 
         events_df = pd.DataFrame(annual_events_meta)
         events_merged = pd.merge(
             events_df,
-            ann[["Year", "Year_Str", "Price", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt"]],
+            ann[["Year", "Year_Str", "Price", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt", "YoY_Pct"]],
             on="Year",
             how="inner",
         )
+        events_merged["YoY_Pct_Plot"] = events_merged["YoY_Pct"].fillna(0.0)
         event_records = events_merged[
             [
                 "Year_Str",
@@ -1715,6 +1729,7 @@ else:
                 "Price_Fmt",
                 "YoY_Diff_Fmt",
                 "YoY_Pct_Fmt",
+                "YoY_Pct_Plot",
             ]
         ].to_dict(orient="records")
 
@@ -1761,9 +1776,22 @@ else:
             )
         )
 
+        above_center_records = [r for r in event_records if r["Above_Label"] and r["Year_Str"] != str(end_year)]
+        above_edge_records = [r for r in event_records if r["Above_Label"] and r["Year_Str"] == str(end_year)]
+
         above_texts = (
-            alt.Chart(alt.Data(values=[r for r in event_records if r["Above_Label"]]))
+            alt.Chart(alt.Data(values=above_center_records))
             .mark_text(dy=-11, fontSize=9.8, fontWeight="bold", color="#111111")
+            .encode(
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
+                y=alt.Y("Price:Q", scale=locked_y_scale_a),
+                text="Above_Label:N",
+            )
+        )
+
+        above_edge_texts = (
+            alt.Chart(alt.Data(values=above_edge_records))
+            .mark_text(dy=-11, dx=4, align="right", fontSize=9.8, fontWeight="bold", color="#111111")
             .encode(
                 x=alt.X("Year_Str:O", scale=shared_x_scale),
                 y=alt.Y("Price:Q", scale=locked_y_scale_a),
@@ -1781,7 +1809,7 @@ else:
             )
         )
 
-        annual_layers.extend([event_rules, event_diamonds, above_texts, below_texts])
+        annual_layers.extend([event_rules, event_diamonds, above_texts, above_edge_texts, below_texts])
 
     if is_single_annual_year:
         annual_chart_title = (
@@ -1821,7 +1849,7 @@ else:
         ["Year_Str", "YoY_Pct_Plot", "Direction", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt", "Is_Selected"]
     ].to_dict(orient="records")
 
-    yoy_bar_chart = (
+    yoy_bars = (
         alt.Chart(alt.Data(values=yoy_records))
         .mark_bar()
         .encode(
@@ -1853,6 +1881,47 @@ else:
                 alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
             ],
         )
+    )
+
+    yoy_layers = [yoy_bars]
+    if show_annual_events:
+        yoy_event_rules = (
+            alt.Chart(alt.Data(values=event_records))
+            .mark_rule(strokeDash=[3, 3], strokeWidth=1.2, opacity=0.65)
+            .encode(
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
+                color=alt.Color(
+                    "Category:N",
+                    scale=alt.Scale(domain=event_categories, range=event_colors),
+                    legend=None,
+                ),
+            )
+        )
+        yoy_event_diamonds = (
+            alt.Chart(alt.Data(values=event_records))
+            .mark_point(shape="diamond", size=115, filled=True, stroke="white", strokeWidth=1.1)
+            .encode(
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
+                y=alt.Y("YoY_Pct_Plot:Q"),
+                color=alt.Color(
+                    "Category:N",
+                    scale=alt.Scale(domain=event_categories, range=event_colors),
+                    legend=None,
+                ),
+                tooltip=[
+                    alt.Tooltip("Year_Str:N", title="Year"),
+                    alt.Tooltip("Category:N", title="Driver Category"),
+                    alt.Tooltip("Event:N", title="Event"),
+                    alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual {central_word_title}"),
+                    alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
+                ],
+            )
+        )
+        yoy_layers.extend([yoy_event_rules, yoy_event_diamonds])
+
+    yoy_bar_chart = (
+        alt.layer(*yoy_layers)
+        .resolve_scale(color="independent")
         .properties(
             width=640,
             height=250,
