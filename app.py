@@ -477,30 +477,25 @@ with top_col2:
     )
 
 sub_col1, sub_col2, sub_col3, sub_col4 = st.columns(
-    [1.28, 0.92, 0.90, 1.15],
+    [1.08, 1.04, 0.98, 1.25],
+    gap="small",
     vertical_alignment="center",
 )
 with sub_col1:
-    t_left, t_mid, t_right = st.columns([1.0, 0.72, 1.25], gap="small", vertical_alignment="center")
-    with t_mid:
-        is_median = st.toggle(
-            "Mean / Median",
-            value=False,
-            key="central_tendency_toggle",
-            label_visibility="collapsed",
-            help="Left: Mean · Right: Median",
-        )
-    mean_style = "font-weight:700; color:#111111;" if not is_median else "font-weight:400; color:#666666;"
-    med_style = "font-weight:700; color:#111111;" if is_median else "font-weight:400; color:#666666;"
+    t_left, t_right = st.columns([0.36, 0.64], gap="small", vertical_alignment="center")
     with t_left:
         st.markdown(
-            f"<div style='text-align:right; font-size:0.875rem; line-height:1.2; white-space:nowrap; {mean_style}'>Mean</div>",
+            "<div style='display:flex; align-items:center; justify-content:flex-end; "
+            "height:1.5rem; line-height:1.5rem; font-size:0.875rem; font-weight:400; "
+            "color:#FFFFFF; white-space:nowrap; margin:0; padding:0;'>Mean</div>",
             unsafe_allow_html=True,
         )
     with t_right:
-        st.markdown(
-            f"<div style='text-align:left; font-size:0.875rem; line-height:1.2; white-space:nowrap; {med_style}'>Median</div>",
-            unsafe_allow_html=True,
+        is_median = st.toggle(
+            "Median",
+            value=False,
+            key="central_tendency_toggle",
+            help="Left: Mean · Right: Median",
         )
 with sub_col2:
     show_seasonal_events = st.toggle(
@@ -544,7 +539,7 @@ if not is_us_benchmark:
     avg_offset_dollar = round(avg_offset_dollar, 2)
     avg_offset_pct = float(((annual_df[price_col].mean() / annual_df[us_bench_col].mean()) - 1.0) * 100)
     st.caption(
-        f"**Active Series:** {selected_meta['full_name']} · **Source:** {geo_method_note} · "
+        f"**Active Series:** {selected_meta['full_name']} · **Source:** {geo_method_note}  \n"
         f"**Avg Offset vs. U.S.:** `{avg_offset_dollar:+.2f}/gal` (`{avg_offset_pct:+.1f}%`)"
     )
 
@@ -557,7 +552,7 @@ tab_seasonal, tab_annual = st.tabs([
 # TAB 1: SEASONAL TRENDS BY CALENDAR MONTH
 # ==============================================================================
 with tab_seasonal:
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_names = ["01 Jan", "02 Feb", "03 Mar", "04 Apr", " 05 May", "06 Jun", "07 Jul", "08 Aug", "09 Sep", "10 Oct", "11 Nov", "12 Dec"]
     month_full_names = [
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
