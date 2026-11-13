@@ -696,7 +696,7 @@ if ci_locked_off:
             cursor: not-allowed !important;
         }
         .st-key-ci_toggle:hover::after {
-            content: "95% CI available only for monthly all-years seasonal trends";
+            content: "95% CI requires multi-year data per month";
             position: absolute;
             top: calc(100% + 6px);
             right: 0;
