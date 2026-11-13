@@ -696,7 +696,7 @@ if ci_locked_off:
             cursor: not-allowed !important;
         }
         .st-key-ci_toggle:hover::after {
-            content: "95% CI requires 'All' years in Seasonal view";
+            content: "95% CI requires All years in Seasonal view";
             position: absolute;
             top: calc(100% + 6px);
             right: 0;
