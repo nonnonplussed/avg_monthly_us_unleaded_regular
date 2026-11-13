@@ -542,35 +542,35 @@ with top_col2:
     )
 
 sub_col1, sub_col2, sub_col3, sub_col4 = st.columns(
-    [1.12, 1.24, 0.86, 0.94],
+    [1.26, 0.86, 1.14, 0.94],
     gap="small",
     vertical_alignment="center",
 )
 with sub_col1:
-    is_median = st.toggle(
-        "Median",
-        value=False,
-        key="central_tendency_toggle",
-        help="Left: Mean · Right: Median",
-    )
-with sub_col2:
     show_seasonal_events = st.toggle(
         "Seasonal",
-        value=False,
+        value=True,
         key="seasonal_events_toggle",
         help="Blend transitions (Mar, Nov) & summer driving season (May–Aug)",
     )
-with sub_col3:
+with sub_col2:
     show_annual_events = st.toggle(
         "Annual",
-        value=False,
+        value=True,
         key="annual_events_toggle",
         help="Hurricanes, macro shocks, OPEC/shale, geopolitics & SPR releases",
+    )
+with sub_col3:
+    is_median = st.toggle(
+        "Median",
+        value=True,
+        key="central_tendency_toggle",
+        help="Left: Mean · Right: Median",
     )
 with sub_col4:
     show_ci = st.toggle(
         "95% CI",
-        value=False,
+        value=True,
         key="ci_toggle",
         help="Adds the 95% confidence interval for the selected central tendency (Mean or Median)",
     )
