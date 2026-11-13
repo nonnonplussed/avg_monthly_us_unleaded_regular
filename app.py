@@ -11,25 +11,62 @@ st.set_page_config(page_title="U.S. Regular Gasoline Price Trends", layout="cent
 st.markdown(
     """
     <style>
-    .st-key-central_tendency_toggle label[data-baseweb="checkbox"],
-    div[data-testid="stCheckbox"]:has(input[aria-label="Median"]) label[data-baseweb="checkbox"] {
-        display: inline-flex;
-        align-items: center;
+    /* Mean [slider] Median toggle: show "Mean" in white on the left of the slider, aligned with "Median" */
+    .st-key-central_tendency_toggle label {
+        display: inline-flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 0.45rem !important;
     }
-    .st-key-central_tendency_toggle label[data-baseweb="checkbox"]::before,
-    div[data-testid="stCheckbox"]:has(input[aria-label="Median"]) label[data-baseweb="checkbox"]::before {
+    .st-key-central_tendency_toggle label::before {
         content: "Mean";
-        color: #FFFFFF;
-        font-size: 0.875rem;
-        font-weight: 400;
-        line-height: 1.6;
-        margin-right: 0.5rem;
-        white-space: nowrap;
-    }
-    .st-key-central_tendency_toggle label[data-baseweb="checkbox"] p,
-    div[data-testid="stCheckbox"]:has(input[aria-label="Median"]) label[data-baseweb="checkbox"] p {
         color: #FFFFFF !important;
+        font-size: 0.875rem !important;
+        font-weight: 400 !important;
+        line-height: 1.4 !important;
         white-space: nowrap !important;
+    }
+    .st-key-central_tendency_toggle label p,
+    .st-key-seasonal_events_toggle label p,
+    .st-key-annual_events_toggle label p,
+    .st-key-ci_toggle label p {
+        color: #FFFFFF !important;
+        font-size: 0.875rem !important;
+        font-weight: 400 !important;
+        line-height: 1.4 !important;
+        white-space: nowrap !important;
+        margin: 0 !important;
+    }
+
+    /* Prefix "Events:" inline before the Seasonal toggle */
+    .st-key-seasonal_events_toggle > div {
+        display: inline-flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+    }
+    .st-key-seasonal_events_toggle > div::before {
+        content: "Events:";
+        color: #FFFFFF !important;
+        font-size: 0.875rem !important;
+        font-weight: 400 !important;
+        line-height: 1.4 !important;
+        margin-right: 0.55rem !important;
+        white-space: nowrap !important;
+    }
+
+    /* Place "Seasonal" and "Annual" labels before their respective sliders */
+    .st-key-seasonal_events_toggle label,
+    .st-key-annual_events_toggle label {
+        display: inline-flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 0.45rem !important;
+    }
+    .st-key-seasonal_events_toggle label > div:last-of-type,
+    .st-key-annual_events_toggle label > div:last-of-type {
+        order: -1 !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
     }
     </style>
     """,
@@ -505,7 +542,7 @@ with top_col2:
     )
 
 sub_col1, sub_col2, sub_col3, sub_col4 = st.columns(
-    [1.02, 1.08, 0.98, 1.38],
+    [1.12, 1.24, 0.86, 0.94],
     gap="small",
     vertical_alignment="center",
 )
@@ -518,20 +555,23 @@ with sub_col1:
     )
 with sub_col2:
     show_seasonal_events = st.toggle(
-        "Seasonal Events",
+        "Seasonal",
         value=False,
+        key="seasonal_events_toggle",
         help="Blend transitions (Mar, Nov) & summer driving season (May–Aug)",
     )
 with sub_col3:
     show_annual_events = st.toggle(
-        "Annual Events",
+        "Annual",
         value=False,
+        key="annual_events_toggle",
         help="Hurricanes, macro shocks, OPEC/shale, geopolitics & SPR releases",
     )
 with sub_col4:
     show_ci = st.toggle(
-        "95% Confidence Interval",
+        "95% CI",
         value=False,
+        key="ci_toggle",
         help="Adds the 95% confidence interval for the selected central tendency (Mean or Median)",
     )
 
