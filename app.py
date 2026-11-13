@@ -122,8 +122,8 @@ with tab_seasonal:
     summary["Pct_Jan_Fmt"] = summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format)
     summary["MoM_Pct_Fmt"] = summary["MoM_Pct"].map("{:+.1f}%".format)
 
-    headroom_m = 0.55 if show_seasonal_events else 0.25
-    y_max_m = float(max(2.85, np.ceil(summary["Mean"].max() * 2) / 2 + headroom_m))
+    # Keep y-axis domain and chart height identical whether overlays are toggled on or off
+    y_max_m = float(max(2.85, np.ceil(summary["Mean"].max() * 2) / 2 + 0.25))
     y_grid_vals = [round(float(v), 1) for v in np.arange(0, y_max_m + 0.01, 0.5)]
     date_span = f"{monthly_df['Date'].min():%B %Y} - {monthly_df['Date'].max():%B %Y}"
     subtitle_m = f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
@@ -164,6 +164,7 @@ with tab_seasonal:
                     labelFontSize=12,
                     titleFontSize=13,
                     titlePadding=8,
+                    minExtent=36,
                     labelColor="#333333",
                     titleColor="#111111",
                 ),
@@ -195,48 +196,48 @@ with tab_seasonal:
 
     if show_seasonal_events:
         mean_lookup = dict(zip(summary["Month"], summary["Mean"]))
-        offset_step = float(summary["Mean"].max()) * 0.035
-        span_y = float(max(mean_lookup[m] for m in ["May", "Jun", "Jul", "Aug"])) + offset_step * 2.6
+        marker_pad = y_max_m * 0.024
+        span_y = float(max(mean_lookup[m] for m in ["May", "Jun", "Jul", "Aug"])) + y_max_m * 0.058
 
         seasonal_event_points = [
             {
                 "Month": "Mar",
-                "y_pos": float(mean_lookup["Mar"]) + offset_step,
+                "y_pos": float(mean_lookup["Mar"]) + marker_pad,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Summer-Blend Switch",
                 "Detail": "EPA summer-blend transition & spring refinery maintenance (sharpest monthly rise)",
             },
             {
                 "Month": "Nov",
-                "y_pos": float(mean_lookup["Nov"]) + offset_step,
+                "y_pos": float(mean_lookup["Nov"]) + marker_pad,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Winter-Blend Switch",
                 "Detail": "Autumn switch back to lower-cost winter-blend gasoline (sharpest monthly drop)",
             },
             {
                 "Month": "May",
-                "y_pos": float(mean_lookup["May"]) + offset_step,
+                "y_pos": float(mean_lookup["May"]) + marker_pad,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Summer driving season begins around Memorial Day",
             },
             {
                 "Month": "Jun",
-                "y_pos": float(mean_lookup["Jun"]) + offset_step,
+                "y_pos": float(mean_lookup["Jun"]) + marker_pad,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
-                "Tag": "Summer Driving Season (May–Aug)",
+                "Tag": "",
                 "Detail": "Peak summer highway travel demand & summer-grade fuel plateau",
             },
             {
                 "Month": "Jul",
-                "y_pos": float(mean_lookup["Jul"]) + offset_step,
+                "y_pos": float(mean_lookup["Jul"]) + marker_pad,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Mid-summer travel demand keeps refinery utilization elevated",
             },
             {
                 "Month": "Aug",
-                "y_pos": float(mean_lookup["Aug"]) + offset_step,
+                "y_pos": float(mean_lookup["Aug"]) + marker_pad,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Late-summer travel demand through Labor Day",
@@ -250,7 +251,7 @@ with tab_seasonal:
 
         span_line = (
             alt.Chart(alt.Data(values=span_records))
-            .mark_line(color="#d95f02", strokeWidth=2.4, strokeDash=[5, 3])
+            .mark_line(color="#d95f02", strokeWidth=2.3, strokeDash=[5, 3])
             .encode(
                 x=alt.X("Month:N", sort=month_names),
                 y=alt.Y("span_y:Q"),
@@ -258,9 +259,19 @@ with tab_seasonal:
             )
         )
 
+        span_label = (
+            alt.Chart(alt.Data(values=[{"Month": "Jun", "span_y": span_y, "Text": "Summer Driving Season (May–Aug)"}]))
+            .mark_text(dy=-8, dx=16, fontSize=10.5, fontWeight="bold", color="#111111")
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("span_y:Q"),
+                text="Text:N",
+            )
+        )
+
         event_markers = (
             alt.Chart(alt.Data(values=seasonal_event_points))
-            .mark_point(shape="diamond", size=145, filled=True, stroke="white", strokeWidth=1.2)
+            .mark_point(shape="diamond", size=135, filled=True, stroke="white", strokeWidth=1.2)
             .encode(
                 x=alt.X("Month:N", sort=month_names),
                 y=alt.Y("y_pos:Q"),
@@ -273,15 +284,7 @@ with tab_seasonal:
                         ],
                         range=["#e7298a", "#d95f02"],
                     ),
-                    legend=alt.Legend(
-                        title="Seasonal Event Overlays (Hover Diamonds for Details)",
-                        orient="bottom",
-                        columns=1,
-                        titleFontSize=12,
-                        labelFontSize=11.5,
-                        labelColor="#222222",
-                        titleColor="#111111",
-                    ),
+                    legend=None,
                 ),
                 tooltip=[
                     alt.Tooltip("Month:N", title="Month"),
@@ -293,7 +296,7 @@ with tab_seasonal:
 
         event_labels = (
             alt.Chart(alt.Data(values=[r for r in seasonal_event_points if r["Tag"]]))
-            .mark_text(dy=-14, fontSize=10.5, fontWeight="bold", color="#111111")
+            .mark_text(dy=-11, fontSize=10.5, fontWeight="bold", color="#111111")
             .encode(
                 x=alt.X("Month:N", sort=month_names),
                 y=alt.Y("y_pos:Q"),
@@ -302,10 +305,10 @@ with tab_seasonal:
         )
 
         seasonal_chart = (
-            alt.layer(seasonal_base, span_line, event_markers, event_labels)
+            alt.layer(seasonal_base, span_line, span_label, event_markers, event_labels)
             .resolve_scale(color="independent")
             .properties(
-                height=475,
+                height=460,
                 title=alt.TitleParams(
                     text="Average Price of Unleaded Regular Gasoline by Month of the Year",
                     subtitle=subtitle_m,
@@ -407,26 +410,26 @@ with tab_annual:
         ["Year_Str", "Price", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt", "Pct_Start_Fmt"]
     ].to_dict(orient="records")
 
-    headroom_a = 0.65 if show_annual_events else 0.25
-    y_max_a = float(np.ceil(ann["Price"].max() * 2) / 2 + headroom_a)
+    # Keep y-axis domain, x-axis domain, and chart height identical whether overlays are on or off
+    y_max_a = float(np.ceil(ann["Price"].max() * 2) / 2 + 0.25)
+    all_year_strs = ann["Year_Str"].tolist()
     tick_years = [str(y) for y in range(start_year, end_year + 1, 3)]
 
+    shared_x_scale = alt.Scale(domain=all_year_strs, paddingInner=0.22, paddingOuter=0.06)
+    shared_x_axis = alt.Axis(
+        values=tick_years,
+        labelAngle=0,
+        labelFontSize=12,
+        titleFontSize=13,
+        titlePadding=8,
+        labelColor="#333333",
+        titleColor="#111111",
+        grid=True,
+        gridColor="#EAEAEA",
+    )
+
     base_annual = alt.Chart(alt.Data(values=ann_records)).encode(
-        x=alt.X(
-            "Year_Str:O",
-            title="Year",
-            axis=alt.Axis(
-                values=tick_years,
-                labelAngle=0,
-                labelFontSize=12,
-                titleFontSize=13,
-                titlePadding=8,
-                labelColor="#333333",
-                titleColor="#111111",
-                grid=True,
-                gridColor="#EAEAEA",
-            ),
-        )
+        x=alt.X("Year_Str:O", title="Year", scale=shared_x_scale, axis=shared_x_axis)
     )
 
     area_layer = base_annual.mark_area(
@@ -444,6 +447,7 @@ with tab_annual:
                 labelFontSize=12,
                 titleFontSize=13,
                 titlePadding=8,
+                minExtent=36,
                 labelColor="#333333",
                 titleColor="#111111",
             ),
@@ -461,19 +465,13 @@ with tab_annual:
         ],
     )
 
-    mean_rule = (
-        alt.Chart(alt.Data(values=[{"mean_val": mean_ann}]))
-        .mark_rule(color="#666666", strokeDash=[6, 4], strokeWidth=1.4)
-        .encode(y="mean_val:Q")
-    )
-
-    subtitle_a = (
-        f"Dashed line = {len(ann)}-year average (${mean_ann:.2f}/gal, {latest_label} Dollars) · Hover any year for details"
-        if is_real
-        else f"Dashed line = {len(ann)}-year average (${mean_ann:.2f}/gal, Nominal) · Hover any year for details"
-    )
-
     if show_annual_events:
+        subtitle_a = (
+            f"{len(ann)}-year average: ${mean_ann:.2f}/gal ({latest_label} Dollars) · Hover any year or diamond for details"
+            if is_real
+            else f"{len(ann)}-year average: ${mean_ann:.2f}/gal (Nominal) · Hover any year or diamond for details"
+        )
+
         annual_events_meta = [
             {
                 "Year": 1998,
@@ -581,7 +579,7 @@ with tab_annual:
             alt.Chart(alt.Data(values=event_records))
             .mark_rule(strokeDash=[3, 3], strokeWidth=1.2, opacity=0.65)
             .encode(
-                x=alt.X("Year_Str:O"),
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
                 color=alt.Color(
                     "Category:N",
                     scale=alt.Scale(domain=event_categories, range=event_colors),
@@ -592,22 +590,14 @@ with tab_annual:
 
         event_diamonds = (
             alt.Chart(alt.Data(values=event_records))
-            .mark_point(shape="diamond", size=145, filled=True, stroke="white", strokeWidth=1.2)
+            .mark_point(shape="diamond", size=140, filled=True, stroke="white", strokeWidth=1.2)
             .encode(
-                x=alt.X("Year_Str:O"),
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
                 y=alt.Y("Price:Q"),
                 color=alt.Color(
                     "Category:N",
                     scale=alt.Scale(domain=event_categories, range=event_colors),
-                    legend=alt.Legend(
-                        title="Historical Event Overlays (Hover Diamonds for Details)",
-                        orient="bottom",
-                        columns=2,
-                        titleFontSize=12,
-                        labelFontSize=11,
-                        labelColor="#222222",
-                        titleColor="#111111",
-                    ),
+                    legend=None,
                 ),
                 tooltip=[
                     alt.Tooltip("Year_Str:N", title="Year"),
@@ -621,9 +611,9 @@ with tab_annual:
 
         above_texts = (
             alt.Chart(alt.Data(values=[r for r in event_records if r["Above_Label"]]))
-            .mark_text(dy=-13, fontSize=9.8, fontWeight="bold", color="#111111")
+            .mark_text(dy=-11, fontSize=9.8, fontWeight="bold", color="#111111")
             .encode(
-                x=alt.X("Year_Str:O"),
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
                 y=alt.Y("Price:Q"),
                 text="Above_Label:N",
             )
@@ -631,19 +621,19 @@ with tab_annual:
 
         below_texts = (
             alt.Chart(alt.Data(values=[r for r in event_records if r["Below_Label"]]))
-            .mark_text(dy=17, fontSize=9.8, fontWeight="bold", color="#111111")
+            .mark_text(dy=16, fontSize=9.8, fontWeight="bold", color="#111111")
             .encode(
-                x=alt.X("Year_Str:O"),
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
                 y=alt.Y("Price:Q"),
                 text="Below_Label:N",
             )
         )
 
         annual_line_chart = (
-            alt.layer(area_layer, points_layer, mean_rule, event_rules, event_diamonds, above_texts, below_texts)
+            alt.layer(area_layer, points_layer, event_rules, event_diamonds, above_texts, below_texts)
             .resolve_scale(color="independent")
             .properties(
-                height=430,
+                height=390,
                 title=alt.TitleParams(
                     text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
                     subtitle=subtitle_a,
@@ -659,6 +649,18 @@ with tab_annual:
             .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
         )
     else:
+        subtitle_a = (
+            f"Dashed line = {len(ann)}-year average (${mean_ann:.2f}/gal, {latest_label} Dollars) · Hover any year for details"
+            if is_real
+            else f"Dashed line = {len(ann)}-year average (${mean_ann:.2f}/gal, Nominal) · Hover any year for details"
+        )
+
+        mean_rule = (
+            alt.Chart(alt.Data(values=[{"mean_val": mean_ann}]))
+            .mark_rule(color="#666666", strokeDash=[6, 4], strokeWidth=1.4)
+            .encode(y="mean_val:Q")
+        )
+
         annual_line_chart = (
             alt.layer(area_layer, points_layer, mean_rule)
             .properties(
@@ -680,11 +682,12 @@ with tab_annual:
 
     st.altair_chart(annual_line_chart, width="stretch")
 
-    yoy_clean = ann.dropna(subset=["YoY_Pct"])
-    yoy_records = yoy_clean[
-        ["Year_Str", "YoY_Pct", "Direction", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt"]
+    # Include all years (1992–2025) on the x-axis so every year lines up identically with the chart above
+    yoy_all = ann.copy()
+    yoy_all["YoY_Pct_Plot"] = yoy_all["YoY_Pct"].fillna(0.0)
+    yoy_records = yoy_all[
+        ["Year_Str", "YoY_Pct_Plot", "Direction", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt"]
     ].to_dict(orient="records")
-    yoy_tick_years = [str(y) for y in range(start_year + 1, end_year + 1, 3)]
 
     yoy_bar_chart = (
         alt.Chart(alt.Data(values=yoy_records))
@@ -693,21 +696,11 @@ with tab_annual:
             x=alt.X(
                 "Year_Str:O",
                 title="Year",
-                scale=alt.Scale(paddingInner=0.22),
-                axis=alt.Axis(
-                    values=yoy_tick_years,
-                    labelAngle=0,
-                    labelFontSize=12,
-                    titleFontSize=13,
-                    titlePadding=8,
-                    labelColor="#333333",
-                    titleColor="#111111",
-                    grid=True,
-                    gridColor="#EAEAEA",
-                ),
+                scale=shared_x_scale,
+                axis=shared_x_axis,
             ),
             y=alt.Y(
-                "YoY_Pct:Q",
+                "YoY_Pct_Plot:Q",
                 title="Year-over-Year Change (%)",
                 axis=alt.Axis(
                     grid=True,
@@ -715,6 +708,7 @@ with tab_annual:
                     labelFontSize=12,
                     titleFontSize=13,
                     titlePadding=8,
+                    minExtent=36,
                     labelColor="#333333",
                     titleColor="#111111",
                 ),
@@ -734,8 +728,8 @@ with tab_annual:
         .properties(
             height=270,
             title=alt.TitleParams(
-                text=f"Year-over-Year Percentage Price Change ({start_year + 1}–{end_year})",
-                subtitle="Annual percentage swing compared to the prior calendar year",
+                text=f"Year-over-Year Percentage Price Change ({start_year}–{end_year})",
+                subtitle="Annual percentage swing compared to the prior calendar year (1992 baseline has no prior year)",
                 anchor="start",
                 fontSize=16,
                 subtitleFontSize=12.5,
