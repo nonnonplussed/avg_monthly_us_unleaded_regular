@@ -442,6 +442,18 @@ def get_geography_series(geo_meta: dict) -> tuple[pd.DataFrame, pd.DataFrame, st
     return m_out, a_out, source_note
 
 
+def _fmt_dollar(v: float) -> str:
+    return "—" if pd.isna(v) else f"${v:.2f}"
+
+
+def _fmt_signed_dollar(v: float) -> str:
+    return "—" if pd.isna(v) else f"{v:+.2f}"
+
+
+def _fmt_signed_pct(v: float) -> str:
+    return "—" if pd.isna(v) else f"{v:+.1f}%"
+
+
 # ==============================================================================
 # TOP CONTROL BAR: GEOGRAPHY DROPDOWN, PRICE BASIS, CENTRAL TENDENCY & OVERLAYS
 # ==============================================================================
@@ -464,13 +476,32 @@ with top_col2:
         horizontal=True,
     )
 
-sub_col1, sub_col2, sub_col3, sub_col4 = st.columns([1.15, 0.95, 0.95, 1.15])
+sub_col1, sub_col2, sub_col3, sub_col4 = st.columns(
+    [1.28, 0.92, 0.90, 1.15],
+    vertical_alignment="center",
+)
 with sub_col1:
-    stat_mode = st.radio(
-        "Central Tendency:",
-        options=["Mean", "Median"],
-        horizontal=True,
-    )
+    t_left, t_mid, t_right = st.columns([1.0, 0.72, 1.25], gap="small", vertical_alignment="center")
+    with t_mid:
+        is_median = st.toggle(
+            "Mean / Median",
+            value=False,
+            key="central_tendency_toggle",
+            label_visibility="collapsed",
+            help="Left: Mean · Right: Median",
+        )
+    mean_style = "font-weight:700; color:#111111;" if not is_median else "font-weight:400; color:#666666;"
+    med_style = "font-weight:700; color:#111111;" if is_median else "font-weight:400; color:#666666;"
+    with t_left:
+        st.markdown(
+            f"<div style='text-align:right; font-size:0.875rem; line-height:1.2; white-space:nowrap; {mean_style}'>Mean</div>",
+            unsafe_allow_html=True,
+        )
+    with t_right:
+        st.markdown(
+            f"<div style='text-align:left; font-size:0.875rem; line-height:1.2; white-space:nowrap; {med_style}'>Median</div>",
+            unsafe_allow_html=True,
+        )
 with sub_col2:
     show_seasonal_events = st.toggle(
         "Seasonal Events",
@@ -499,14 +530,13 @@ for _df in (monthly_df, annual_df):
         _df[_col] = _df[_col].round(2)
 
 is_real = mode.startswith("Inflation-Adjusted")
-is_median = stat_mode == "Median"
 price_col = "Real_Price" if is_real else "Nominal_Price"
 us_bench_col = "US_Benchmark_Real" if is_real else "US_Benchmark_Nominal"
 agg_func = "median" if is_median else "mean"
 ci_func = median_ci_95 if is_median else mean_ci_95
 stat_noun = "Median" if is_median else "Mean"
 y_label_seasonal = f"{stat_noun} Price ({latest_label} $)" if is_real else f"{stat_noun} Price ($)"
-y_label_annual = f"Mean Price ({latest_label} $)" if is_real else "Mean Price ($)"
+y_label_annual = f"{stat_noun} Price ({latest_label} $)" if is_real else f"{stat_noun} Price ($)"
 
 # Compute summary offset vs. U.S. national benchmark for non-US geographies
 if not is_us_benchmark:
@@ -528,67 +558,110 @@ tab_seasonal, tab_annual = st.tabs([
 # ==============================================================================
 with tab_seasonal:
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_full_names = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
     viridis_hex = [
         "#440154", "#482173", "#433e85", "#38588c", "#2d708e", "#25858e",
         "#1e9b8a", "#2ab07f", "#52c569", "#86d549", "#c2df23", "#fde725",
     ]
 
-    monthly_df["Month_Num"] = monthly_df["Date"].dt.month
-    summary = monthly_df.groupby("Month_Num")[price_col].agg(Count="count", Value=agg_func).reindex(range(1, 13))
-    us_month_summary = monthly_df.groupby("Month_Num")[us_bench_col].agg(US_Val=agg_func).reindex(range(1, 13))
+    m_min_yr = int(monthly_df["Year"].min())
+    m_max_yr = int(monthly_df["Year"].max())
+    all_seasonal_label = f"{m_min_yr}–{m_max_yr} (All)"
+    seasonal_year_options = [all_seasonal_label] + [str(y) for y in range(m_min_yr, m_max_yr + 1)]
+
+    s_yr_col, _ = st.columns([1.25, 2.75])
+    with s_yr_col:
+        selected_seasonal_year = st.selectbox(
+            "Year to Display:",
+            options=seasonal_year_options,
+            index=0,
+            key="seasonal_year_select",
+            help=f"Select '{all_seasonal_label}' for the multi-year seasonal profile or an individual year ({m_min_yr}–{m_max_yr})",
+        )
+
+    is_single_seasonal_year = selected_seasonal_year != all_seasonal_label
+    if is_single_seasonal_year:
+        sel_yr_m = int(selected_seasonal_year)
+        seasonal_src = monthly_df[monthly_df["Year"] == sel_yr_m].copy()
+    else:
+        sel_yr_m = None
+        seasonal_src = monthly_df.copy()
+
+    seasonal_src["Month_Num"] = seasonal_src["Date"].dt.month
+    summary = seasonal_src.groupby("Month_Num")[price_col].agg(Count="count", Value=agg_func).reindex(range(1, 13))
+    summary["Count"] = summary["Count"].fillna(0).astype(int)
+    us_month_summary = seasonal_src.groupby("Month_Num")[us_bench_col].agg(US_Val=agg_func).reindex(range(1, 13))
     summary["US_Value"] = us_month_summary["US_Val"]
     summary["Value"] = summary["Value"].round(2)
     summary["US_Value"] = summary["US_Value"].round(2)
-    summary["Offset_vs_US"] = summary["Value"] - summary["US_Value"]
+    summary["Offset_vs_US"] = (summary["Value"] - summary["US_Value"]).round(2)
     summary["Month"] = month_names
 
-    ci_lows, ci_highs = [], []
-    max_ci_both = 0.0
+    ci_lows, ci_highs, ci_fmts = [], [], []
+    max_top_both = 0.0
     for m_idx in range(1, 13):
-        m_vals = monthly_df.loc[monthly_df["Month_Num"] == m_idx, price_col].to_numpy()
-        lo_mean, hi_mean = mean_ci_95(m_vals)
-        lo_med, hi_med = median_ci_95(m_vals)
-        max_ci_both = max(max_ci_both, hi_mean, hi_med)
-        if is_median:
-            ci_lows.append(lo_med)
-            ci_highs.append(hi_med)
+        m_vals = seasonal_src.loc[seasonal_src["Month_Num"] == m_idx, price_col].dropna().to_numpy()
+        n_obs = len(m_vals)
+        if n_obs == 0:
+            ci_lows.append(np.nan)
+            ci_highs.append(np.nan)
+            ci_fmts.append("—")
         else:
-            ci_lows.append(lo_mean)
-            ci_highs.append(hi_mean)
-
-    ci_lows = [round(v, 2) for v in ci_lows]
-    ci_highs = [round(v, 2) for v in ci_highs]
+            lo_mean, hi_mean = mean_ci_95(m_vals)
+            lo_med, hi_med = median_ci_95(m_vals)
+            max_top_both = max(max_top_both, hi_mean, hi_med)
+            lo_sel, hi_sel = (lo_med, hi_med) if is_median else (lo_mean, hi_mean)
+            lo_r, hi_r = round(lo_sel, 2), round(hi_sel, 2)
+            ci_lows.append(lo_r)
+            ci_highs.append(hi_r)
+            ci_fmts.append("N/A (n=1)" if n_obs == 1 else f"${lo_r:.2f} – ${hi_r:.2f}")
 
     summary["CI_Low"] = ci_lows
     summary["CI_High"] = ci_highs
-    summary["CI_Fmt"] = [f"${lo:.2f} – ${hi:.2f}" for lo, hi in zip(ci_lows, ci_highs)]
+    summary["CI_Fmt"] = ci_fmts
 
-    jan_val = summary.loc[1, "Value"]
-    summary["Change_vs_Jan"] = summary["Value"] - jan_val
-    summary["Offset_vs_US"] = summary["Offset_vs_US"].round(2)
-    summary["Change_vs_Jan"] = summary["Change_vs_Jan"].round(2)
-    summary["Pct_Change_vs_Jan"] = (summary["Change_vs_Jan"] / jan_val) * 100
+    first_valid_m = summary["Value"].first_valid_index()
+    if first_valid_m is not None:
+        base_month_full = month_full_names[first_valid_m - 1]
+        base_m_val = summary.loc[first_valid_m, "Value"]
+        summary["Change_vs_Jan"] = (summary["Value"] - base_m_val).round(2)
+        summary["Pct_Change_vs_Jan"] = (summary["Change_vs_Jan"] / base_m_val) * 100
+    else:
+        base_month_full = "January"
+        summary["Change_vs_Jan"] = np.nan
+        summary["Pct_Change_vs_Jan"] = np.nan
 
-    prev_val = summary["Value"].shift(1)
-    prev_val.iloc[0] = summary["Value"].iloc[-1]
-    summary["MoM_Pct"] = ((summary["Value"] - prev_val) / prev_val) * 100
+    if is_single_seasonal_year:
+        prev_val = summary["Value"].shift(1)
+        summary["MoM_Pct"] = ((summary["Value"] - prev_val) / prev_val) * 100
+    else:
+        prev_val = summary["Value"].shift(1)
+        prev_val.iloc[0] = summary["Value"].iloc[-1]
+        summary["MoM_Pct"] = ((summary["Value"] - prev_val) / prev_val) * 100
 
-    summary["Val_Price_Fmt"] = summary["Value"].map("${:.2f}".format)
-    summary["Offset_US_Fmt"] = summary["Offset_vs_US"].map("{:+.2f}".format)
-    summary["Change_Jan_Fmt"] = summary["Change_vs_Jan"].map("{:+.2f}".format)
-    summary["Pct_Jan_Fmt"] = summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format)
-    summary["MoM_Pct_Fmt"] = summary["MoM_Pct"].map("{:+.1f}%".format)
+    summary["Val_Price_Fmt"] = summary["Value"].map(_fmt_dollar)
+    summary["Offset_US_Fmt"] = summary["Offset_vs_US"].map(_fmt_signed_dollar)
+    summary["Change_Jan_Fmt"] = summary["Change_vs_Jan"].map(_fmt_signed_dollar)
+    summary["Pct_Jan_Fmt"] = summary["Pct_Change_vs_Jan"].map(_fmt_signed_pct)
+    summary["MoM_Pct_Fmt"] = summary["MoM_Pct"].map(_fmt_signed_pct)
 
-    y_max_m = float(max(3.25, np.ceil(max_ci_both * 2) / 2 + 0.55))
+    min_y_floor = 2.0 if is_single_seasonal_year else 3.25
+    y_max_m = float(max(min_y_floor, np.ceil(max_top_both * 2) / 2 + 0.55))
     y_grid_vals = [round(float(v), 1) for v in np.arange(0, y_max_m + 0.01, 0.5)]
     locked_y_scale_m = alt.Scale(domain=[0, y_max_m], nice=False, clamp=True)
 
-    date_span = f"{monthly_df['Date'].min():%B %Y} - {monthly_df['Date'].max():%B %Y}"
+    date_span = f"{seasonal_src['Date'].min():%B %Y} - {seasonal_src['Date'].max():%B %Y}"
     subtitle_parts_m = [
         f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
     ]
     if show_ci:
-        subtitle_parts_m.append(f"Error bars = 95% CI ({stat_noun.lower()})")
+        if is_single_seasonal_year:
+            subtitle_parts_m.append("95% CI requires n > 1 per month")
+        else:
+            subtitle_parts_m.append(f"Error bars = 95% CI ({stat_noun.lower()})")
     subtitle_m = " · ".join(subtitle_parts_m)
 
     seasonal_records = summary[
@@ -606,8 +679,10 @@ with tab_seasonal:
             "MoM_Pct_Fmt",
         ]
     ].to_dict(orient="records")
+    valid_bar_records = [r for r in seasonal_records if r["Value"] is not None and not pd.isna(r["Value"])]
 
     seasonal_tooltips = [
+        alt.Tooltip("Month:N", title="Month"),
         alt.Tooltip("Val_Price_Fmt:N", title=f"{geo_short} {stat_noun} Price"),
     ]
     if not is_us_benchmark:
@@ -615,21 +690,21 @@ with tab_seasonal:
     if show_ci:
         seasonal_tooltips.append(alt.Tooltip("CI_Fmt:N", title=f"95% CI ({stat_noun})"))
     seasonal_tooltips.extend([
-        alt.Tooltip("Change_Jan_Fmt:N", title="Change vs. January"),
-        alt.Tooltip("Pct_Jan_Fmt:N", title="% Change vs. January"),
+        alt.Tooltip("Change_Jan_Fmt:N", title=f"Change vs. {base_month_full}"),
+        alt.Tooltip("Pct_Jan_Fmt:N", title=f"% Change vs. {base_month_full}"),
         alt.Tooltip("MoM_Pct_Fmt:N", title="% Change vs. Prev. Month"),
         alt.Tooltip("Count:Q", title="Observations"),
     ])
 
     seasonal_base = (
-        alt.Chart(alt.Data(values=seasonal_records))
+        alt.Chart(alt.Data(values=valid_bar_records))
         .mark_bar()
         .encode(
             x=alt.X(
                 "Month:N",
                 sort=month_names,
                 title="Month",
-                scale=alt.Scale(paddingInner=0.16, paddingOuter=0.12),
+                scale=alt.Scale(domain=month_names, paddingInner=0.16, paddingOuter=0.12),
                 axis=alt.Axis(
                     labelAngle=0,
                     labelFontSize=12,
@@ -679,13 +754,14 @@ with tab_seasonal:
 
     seasonal_layers = [seasonal_base]
 
-    if show_ci:
-        ci_data = alt.Data(values=seasonal_records)
+    if show_ci and not is_single_seasonal_year:
+        ci_records = [r for r in seasonal_records if r["Count"] > 1 and not pd.isna(r["CI_Low"])]
+        ci_data = alt.Data(values=ci_records)
         ci_stem_halo = (
             alt.Chart(ci_data)
             .mark_rule(color="white", strokeWidth=3.6, opacity=0.85)
             .encode(
-                x=alt.X("Month:N", sort=month_names),
+                x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
                 y=alt.Y("CI_Low:Q", scale=locked_y_scale_m),
                 y2=alt.Y2("CI_High:Q"),
             )
@@ -694,7 +770,7 @@ with tab_seasonal:
             alt.Chart(ci_data)
             .mark_rule(color="#111111", strokeWidth=1.8)
             .encode(
-                x=alt.X("Month:N", sort=month_names),
+                x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
                 y=alt.Y("CI_Low:Q", scale=locked_y_scale_m),
                 y2=alt.Y2("CI_High:Q"),
                 tooltip=[
@@ -707,22 +783,22 @@ with tab_seasonal:
         ci_cap_top_halo = (
             alt.Chart(ci_data)
             .mark_tick(color="white", thickness=3.6, size=14, opacity=0.85)
-            .encode(x=alt.X("Month:N", sort=month_names), y=alt.Y("CI_High:Q", scale=locked_y_scale_m))
+            .encode(x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)), y=alt.Y("CI_High:Q", scale=locked_y_scale_m))
         )
         ci_cap_top = (
             alt.Chart(ci_data)
             .mark_tick(color="#111111", thickness=1.8, size=12)
-            .encode(x=alt.X("Month:N", sort=month_names), y=alt.Y("CI_High:Q", scale=locked_y_scale_m))
+            .encode(x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)), y=alt.Y("CI_High:Q", scale=locked_y_scale_m))
         )
         ci_cap_bot_halo = (
             alt.Chart(ci_data)
             .mark_tick(color="white", thickness=3.6, size=14, opacity=0.85)
-            .encode(x=alt.X("Month:N", sort=month_names), y=alt.Y("CI_Low:Q", scale=locked_y_scale_m))
+            .encode(x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)), y=alt.Y("CI_Low:Q", scale=locked_y_scale_m))
         )
         ci_cap_bot = (
             alt.Chart(ci_data)
             .mark_tick(color="#111111", thickness=1.8, size=12)
-            .encode(x=alt.X("Month:N", sort=month_names), y=alt.Y("CI_Low:Q", scale=locked_y_scale_m))
+            .encode(x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)), y=alt.Y("CI_Low:Q", scale=locked_y_scale_m))
         )
         seasonal_layers.extend([
             ci_stem_halo,
@@ -734,18 +810,22 @@ with tab_seasonal:
         ])
 
     if show_seasonal_events:
-        top_ref_col = "CI_High" if show_ci else "Value"
+        top_ref_col = "CI_High" if (show_ci and not is_single_seasonal_year) else "Value"
         top_lookup = dict(zip(summary["Month"], summary[top_ref_col]))
-        max_ci_current = float(summary["CI_High"].max())
-        headroom = y_max_m - max_ci_current
+        max_top_current = float(summary[top_ref_col].dropna().max()) if summary[top_ref_col].notna().any() else 0.0
+        headroom = max(0.35, y_max_m - max_top_current)
 
-        y_summer_band = max_ci_current + headroom * 0.64
-        y_blend_marker = max_ci_current + headroom * 0.30
+        y_summer_band = max_top_current + headroom * 0.64
+        y_blend_marker = max_top_current + headroom * 0.30
+
+        def _anchor(m_str: str) -> float:
+            val = top_lookup.get(m_str, np.nan)
+            return float(val) if pd.notna(val) else 0.0
 
         seasonal_event_points = [
             {
                 "Month": "Mar",
-                "anchor_top": float(top_lookup["Mar"]),
+                "anchor_top": _anchor("Mar"),
                 "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Summer-Blend Switch",
@@ -753,7 +833,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Nov",
-                "anchor_top": float(top_lookup["Nov"]),
+                "anchor_top": _anchor("Nov"),
                 "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Winter-Blend Switch",
@@ -761,7 +841,7 @@ with tab_seasonal:
             },
             {
                 "Month": "May",
-                "anchor_top": float(top_lookup["May"]),
+                "anchor_top": _anchor("May"),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -769,7 +849,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Jun",
-                "anchor_top": float(top_lookup["Jun"]),
+                "anchor_top": _anchor("Jun"),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -777,7 +857,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Jul",
-                "anchor_top": float(top_lookup["Jul"]),
+                "anchor_top": _anchor("Jul"),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -785,7 +865,7 @@ with tab_seasonal:
             },
             {
                 "Month": "Aug",
-                "anchor_top": float(top_lookup["Aug"]),
+                "anchor_top": _anchor("Aug"),
                 "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
@@ -797,7 +877,7 @@ with tab_seasonal:
             alt.Chart(alt.Data(values=seasonal_event_points))
             .mark_rule(color="#888888", strokeDash=[2, 2], strokeWidth=1.1)
             .encode(
-                x=alt.X("Month:N", sort=month_names),
+                x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
                 y=alt.Y("anchor_top:Q", scale=locked_y_scale_m),
                 y2=alt.Y2("y_pos:Q"),
             )
@@ -812,7 +892,7 @@ with tab_seasonal:
             alt.Chart(alt.Data(values=span_records))
             .mark_line(color="#d95f02", strokeWidth=2.3, strokeDash=[5, 3])
             .encode(
-                x=alt.X("Month:N", sort=month_names),
+                x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
                 y=alt.Y("span_y:Q", scale=locked_y_scale_m),
                 tooltip=[alt.Tooltip("Detail:N", title="Seasonal Driver")],
             )
@@ -822,7 +902,7 @@ with tab_seasonal:
             alt.Chart(alt.Data(values=[{"Month": "Jun", "span_y": y_summer_band, "Text": "Summer Driving Season (May–Aug)"}]))
             .mark_text(dy=-11, dx=22, fontSize=10.5, fontWeight="bold", color="#111111")
             .encode(
-                x=alt.X("Month:N", sort=month_names),
+                x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
                 y=alt.Y("span_y:Q", scale=locked_y_scale_m),
                 text="Text:N",
             )
@@ -832,7 +912,7 @@ with tab_seasonal:
             alt.Chart(alt.Data(values=seasonal_event_points))
             .mark_point(shape="diamond", size=135, filled=True, stroke="white", strokeWidth=1.2)
             .encode(
-                x=alt.X("Month:N", sort=month_names),
+                x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
                 y=alt.Y("y_pos:Q", scale=locked_y_scale_m),
                 fill=alt.Fill(
                     "Event_Type:N",
@@ -857,7 +937,7 @@ with tab_seasonal:
             alt.Chart(alt.Data(values=[r for r in seasonal_event_points if r["Tag"]]))
             .mark_text(dy=-11, fontSize=10.5, fontWeight="bold", color="#111111")
             .encode(
-                x=alt.X("Month:N", sort=month_names),
+                x=alt.X("Month:N", sort=month_names, scale=alt.Scale(domain=month_names)),
                 y=alt.Y("y_pos:Q", scale=locked_y_scale_m),
                 text="Tag:N",
             )
@@ -866,13 +946,18 @@ with tab_seasonal:
         seasonal_layers.extend([leader_lines, span_line, span_label, event_markers, event_labels])
 
     seasonal_title_prefix = f"{geo_short} {stat_noun}" if not is_us_benchmark else stat_noun
+    seasonal_chart_title = (
+        f"{seasonal_title_prefix} Price of Unleaded Regular Gasoline by Month ({sel_yr_m})"
+        if is_single_seasonal_year
+        else f"{seasonal_title_prefix} Price of Unleaded Regular Gasoline by Month of the Year"
+    )
     seasonal_chart = (
         alt.layer(*seasonal_layers)
         .resolve_scale(color="independent", y="shared")
         .properties(
             height=460,
             title=alt.TitleParams(
-                text=f"{seasonal_title_prefix} Price of Unleaded Regular Gasoline by Month of the Year",
+                text=seasonal_chart_title,
                 subtitle=subtitle_m,
                 anchor="start",
                 fontSize=17,
@@ -898,8 +983,8 @@ with tab_seasonal:
     if show_ci:
         seasonal_table_dict[f"95% CI ({stat_noun})"] = summary["CI_Fmt"]
     seasonal_table_dict.update({
-        "Change vs. January": summary["Change_Jan_Fmt"],
-        "% Change vs. January": summary["Pct_Jan_Fmt"],
+        f"Change vs. {base_month_full}": summary["Change_Jan_Fmt"],
+        f"% Change vs. {base_month_full}": summary["Pct_Jan_Fmt"],
         "% Change vs. Prev. Month": summary["MoM_Pct_Fmt"],
     })
     st.dataframe(pd.DataFrame(seasonal_table_dict), height="content", width="stretch", hide_index=True)
@@ -944,12 +1029,40 @@ with tab_seasonal:
 with tab_annual:
     ann = annual_df.copy()
     ann["Year_Str"] = ann["Year"].astype(str)
-    ann["Price"] = ann[price_col]
-    ann["US_Price"] = ann[us_bench_col]
-    ann["Offset_vs_US"] = ann["Price"] - ann["US_Price"]
-    ann["YoY_Diff"] = ann["Price"].diff()
-    ann["Offset_vs_US"] = ann["Offset_vs_US"].round(2)
-    ann["YoY_Diff"] = ann["YoY_Diff"].round(2)
+
+    if is_median:
+        yr_medians = (
+            monthly_df.groupby("Year", as_index=False)[[price_col, us_bench_col]]
+            .median()
+            .rename(columns={price_col: "Med_Price", us_bench_col: "Med_US_Price"})
+        )
+        ann = pd.merge(ann, yr_medians, on="Year", how="left")
+        ann["Price"] = ann["Med_Price"].fillna(ann[price_col]).round(2)
+        ann["US_Price"] = ann["Med_US_Price"].fillna(ann[us_bench_col]).round(2)
+    else:
+        ann["Price"] = ann[price_col].round(2)
+        ann["US_Price"] = ann[us_bench_col].round(2)
+
+    a_min_yr = int(ann["Year"].min())
+    a_max_yr = int(ann["Year"].max())
+    all_annual_label = f"{a_min_yr}–{a_max_yr} (All)"
+    annual_year_options = [all_annual_label] + [str(y) for y in range(a_min_yr, a_max_yr + 1)]
+
+    a_yr_col, _ = st.columns([1.25, 2.75])
+    with a_yr_col:
+        selected_annual_year = st.selectbox(
+            "Year to Display:",
+            options=annual_year_options,
+            index=0,
+            key="annual_year_select",
+            help=f"Select '{all_annual_label}' for the full historical series or spotlight an individual year ({a_min_yr}–{a_max_yr})",
+        )
+
+    is_single_annual_year = selected_annual_year != all_annual_label
+    sel_yr_a = int(selected_annual_year) if is_single_annual_year else None
+
+    ann["Offset_vs_US"] = (ann["Price"] - ann["US_Price"]).round(2)
+    ann["YoY_Diff"] = ann["Price"].diff().round(2)
     ann["YoY_Pct"] = ann["Price"].pct_change() * 100
 
     start_year = int(ann["Year"].iloc[0])
@@ -965,6 +1078,7 @@ with tab_annual:
     ann["YoY_Pct_Fmt"] = ann["YoY_Pct"].map(lambda v: "—" if pd.isna(v) else f"{v:+.1f}%")
     ann["Pct_Start_Fmt"] = ann["Pct_vs_Start"].map("{:+.1f}%".format)
     ann["Direction"] = np.where(ann["YoY_Pct"].fillna(0) >= 0, "Increase", "Decrease")
+    ann["Is_Selected"] = (ann["Year"] == sel_yr_a) if is_single_annual_year else True
 
     ann_prices_arr = ann["Price"].to_numpy()
     central_ann = float(np.median(ann_prices_arr)) if is_median else float(np.mean(ann_prices_arr))
@@ -978,29 +1092,76 @@ with tab_annual:
 
     peak_row = ann.loc[ann["Price"].idxmax()]
     low_row = ann.loc[ann["Price"].idxmin()]
-    cagr = ((end_price / base_price) ** (1.0 / (end_year - start_year)) - 1.0) * 100
+    span_years = max(1, end_year - start_year)
+    cagr = ((end_price / base_price) ** (1.0 / span_years) - 1.0) * 100
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric(
-        f"{len(ann)}-Year {central_word_title}",
-        f"${central_ann:.2f}",
-        f"95% CI: {ci_ann_fmt}" if show_ci else f"{start_year}–{end_year} {central_word_lower}",
-    )
-    col2.metric(
-        f"Peak Year ({int(peak_row['Year'])})",
-        f"${peak_row['Price']:.2f}",
-        f"{peak_row['Pct_vs_Start']:+.1f}% vs. {start_year}",
-    )
-    col3.metric(
-        f"Lowest Year ({int(low_row['Year'])})",
-        f"${low_row['Price']:.2f}",
-        f"{low_row['Pct_vs_Start']:+.1f}% vs. {start_year}",
-    )
-    col4.metric(
-        "Annualized Growth",
-        f"{cagr:+.1f}%/yr",
-        f"${base_price:.2f} → ${end_price:.2f}",
-    )
+    if not is_single_annual_year:
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(
+            f"{len(ann)}-Year {central_word_title}",
+            f"${central_ann:.2f}",
+            f"95% CI: {ci_ann_fmt}" if show_ci else f"{start_year}–{end_year} {central_word_lower}",
+        )
+        col2.metric(
+            f"Peak Year ({int(peak_row['Year'])})",
+            f"${peak_row['Price']:.2f}",
+            f"{peak_row['Pct_vs_Start']:+.1f}% vs. {start_year}",
+        )
+        col3.metric(
+            f"Lowest Year ({int(low_row['Year'])})",
+            f"${low_row['Price']:.2f}",
+            f"{low_row['Pct_vs_Start']:+.1f}% vs. {start_year}",
+        )
+        col4.metric(
+            "Annualized Growth",
+            f"{cagr:+.1f}%/yr",
+            f"${base_price:.2f} → ${end_price:.2f}",
+        )
+    else:
+        sel_row = ann.loc[ann["Year"] == sel_yr_a].iloc[0]
+        sel_price = float(sel_row["Price"])
+        diff_vs_central = round(sel_price - central_ann, 2)
+        pct_vs_central = ((sel_price - central_ann) / central_ann) * 100
+        rank_pos = int((ann["Price"] > sel_price).sum()) + 1
+
+        yr_m_sub = monthly_df[monthly_df["Year"] == sel_yr_a].copy()
+        if len(yr_m_sub) > 0:
+            yr_m_sub["Month_Name"] = yr_m_sub["Date"].dt.strftime("%b")
+            m_peak = yr_m_sub.loc[yr_m_sub[price_col].idxmax()]
+            m_low = yr_m_sub.loc[yr_m_sub[price_col].idxmin()]
+            yr_ci_lo, yr_ci_hi = ci_func(yr_m_sub[price_col].to_numpy())
+            yr_ci_lo, yr_ci_hi = round(yr_ci_lo, 2), round(yr_ci_hi, 2)
+            c1_sub = (
+                f"95% CI ({len(yr_m_sub)} mos): ${yr_ci_lo:.2f}–${yr_ci_hi:.2f}"
+                if show_ci
+                else f"YoY: {sel_row['YoY_Diff_Fmt']} ({sel_row['YoY_Pct_Fmt']})"
+            )
+            c3_label = f"{sel_yr_a} Peak ({m_peak['Month_Name']})"
+            c3_val = f"${m_peak[price_col]:.2f}"
+            c3_sub = f"Low: ${m_low[price_col]:.2f} ({m_low['Month_Name']})"
+        else:
+            c1_sub = f"YoY: {sel_row['YoY_Diff_Fmt']} ({sel_row['YoY_Pct_Fmt']})"
+            c3_label = f"vs. U.S. ({sel_yr_a})"
+            c3_val = sel_row["Offset_US_Fmt"]
+            c3_sub = f"U.S.: {sel_row['US_Price_Fmt']}"
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(
+            f"{sel_yr_a} Annual {central_word_title}",
+            f"${sel_price:.2f}",
+            c1_sub,
+        )
+        col2.metric(
+            f"vs. {len(ann)}-Yr {central_word_title}",
+            f"{diff_vs_central:+.2f}/gal",
+            f"{pct_vs_central:+.1f}% vs. ${central_ann:.2f}",
+        )
+        col3.metric(c3_label, c3_val, c3_sub)
+        col4.metric(
+            f"Rank ({start_year}–{end_year})",
+            f"#{rank_pos} of {len(ann)}",
+            f"{sel_row['Pct_Start_Fmt']} vs. {start_year}",
+        )
 
     ann_records = ann[
         [
@@ -1013,6 +1174,7 @@ with tab_annual:
             "YoY_Diff_Fmt",
             "YoY_Pct_Fmt",
             "Pct_Start_Fmt",
+            "Is_Selected",
         ]
     ].to_dict(orient="records")
 
@@ -1047,7 +1209,7 @@ with tab_annual:
     area_layer = base_annual.mark_area(
         line={"color": "#25858e", "strokeWidth": 2.5},
         color="#25858e",
-        opacity=0.16,
+        opacity=0.10 if is_single_annual_year else 0.16,
     ).encode(
         y=alt.Y(
             "Price:Q",
@@ -1068,11 +1230,11 @@ with tab_annual:
 
     ann_tooltips = [
         alt.Tooltip("Year_Str:N", title="Year"),
-        alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual Mean"),
+        alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual {central_word_title}"),
     ]
     if not is_us_benchmark:
         ann_tooltips.extend([
-            alt.Tooltip("US_Price_Fmt:N", title="U.S. Benchmark Mean"),
+            alt.Tooltip("US_Price_Fmt:N", title=f"U.S. Benchmark {central_word_title}"),
             alt.Tooltip("Offset_US_Fmt:N", title="Offset vs. U.S. ($)"),
         ])
     ann_tooltips.extend([
@@ -1081,8 +1243,9 @@ with tab_annual:
         alt.Tooltip("Pct_Start_Fmt:N", title=f"% Change vs. {start_year}"),
     ])
 
-    points_layer = base_annual.mark_circle(size=70, color="#1f6f78", opacity=0.95).encode(
+    points_layer = base_annual.mark_circle(size=70, color="#1f6f78").encode(
         y=alt.Y("Price:Q", scale=locked_y_scale_a),
+        opacity=alt.condition("datum.Is_Selected", alt.value(0.95), alt.value(0.28)),
         tooltip=ann_tooltips,
     )
 
@@ -1126,16 +1289,57 @@ with tab_annual:
             y=alt.Y("US_Price:Q", scale=locked_y_scale_a),
             tooltip=[
                 alt.Tooltip("Year_Str:N", title="Year"),
-                alt.Tooltip("US_Price_Fmt:N", title="U.S. Benchmark Mean"),
-                alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual Mean"),
+                alt.Tooltip("US_Price_Fmt:N", title=f"U.S. Benchmark {central_word_title}"),
+                alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual {central_word_title}"),
                 alt.Tooltip("Offset_US_Fmt:N", title="Offset vs. U.S. ($)"),
             ],
         )
         annual_layers.append(us_ref_line)
 
+    if is_single_annual_year:
+        sel_records = [r for r in ann_records if r["Is_Selected"]]
+        for r in sel_records:
+            r["Callout_Text"] = f"{r['Year_Str']}: {r['Price_Fmt']}"
+        sel_data = alt.Data(values=sel_records)
+        sel_vline = (
+            alt.Chart(sel_data)
+            .mark_rule(color="#111111", strokeDash=[3, 3], strokeWidth=1.5, opacity=0.8)
+            .encode(x=alt.X("Year_Str:O", scale=shared_x_scale))
+        )
+        sel_halo = (
+            alt.Chart(sel_data)
+            .mark_circle(size=230, color="#d95f02", opacity=0.25)
+            .encode(x=alt.X("Year_Str:O", scale=shared_x_scale), y=alt.Y("Price:Q", scale=locked_y_scale_a))
+        )
+        sel_dot = (
+            alt.Chart(sel_data)
+            .mark_circle(size=120, color="#d95f02", stroke="white", strokeWidth=1.6)
+            .encode(
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
+                y=alt.Y("Price:Q", scale=locked_y_scale_a),
+                tooltip=ann_tooltips,
+            )
+        )
+        sel_label = (
+            alt.Chart(sel_data)
+            .mark_text(dy=-14, fontSize=11, fontWeight="bold", color="#111111")
+            .encode(
+                x=alt.X("Year_Str:O", scale=shared_x_scale),
+                y=alt.Y("Price:Q", scale=locked_y_scale_a),
+                text="Callout_Text:N",
+            )
+        )
+        annual_layers.extend([sel_vline, sel_halo, sel_dot, sel_label])
+
     basis_tag = f"{latest_label} Dollars" if is_real else "Nominal"
     us_note = " · Dotted gray curve = U.S. national benchmark" if not is_us_benchmark else ""
-    if show_ci:
+    if is_single_annual_year:
+        sel_r_sub = ann.loc[ann["Year"] == sel_yr_a].iloc[0]
+        subtitle_a = (
+            f"Highlighted: {sel_yr_a} ({sel_r_sub['Price_Fmt']}/gal, YoY {sel_r_sub['YoY_Pct_Fmt']}) · "
+            f"Dashed line = {len(ann)}-yr {central_word_lower} (${central_ann:.2f}/gal, {basis_tag}){us_note}"
+        )
+    elif show_ci:
         subtitle_a = (
             f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal; "
             f"95% CI: {ci_ann_fmt}, {basis_tag}){us_note}"
@@ -1277,7 +1481,7 @@ with tab_annual:
                     alt.Tooltip("Year_Str:N", title="Year"),
                     alt.Tooltip("Category:N", title="Driver Category"),
                     alt.Tooltip("Event:N", title="Event"),
-                    alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual Mean"),
+                    alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual {central_word_title}"),
                     alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
                 ],
             )
@@ -1305,11 +1509,18 @@ with tab_annual:
 
         annual_layers.extend([event_rules, event_diamonds, above_texts, below_texts])
 
-    annual_chart_title = (
-        f"Annual Mean {geo_short} Regular Retail Gasoline Price ({start_year}–{end_year})"
-        if not is_us_benchmark
-        else f"Annual Mean U.S. Regular Retail Gasoline Price ({start_year}–{end_year})"
-    )
+    if is_single_annual_year:
+        annual_chart_title = (
+            f"Annual {central_word_title} {geo_short} Regular Retail Gasoline Price — {sel_yr_a} ({start_year}–{end_year})"
+            if not is_us_benchmark
+            else f"Annual {central_word_title} U.S. Regular Retail Gasoline Price — {sel_yr_a} ({start_year}–{end_year})"
+        )
+    else:
+        annual_chart_title = (
+            f"Annual {central_word_title} {geo_short} Regular Retail Gasoline Price ({start_year}–{end_year})"
+            if not is_us_benchmark
+            else f"Annual {central_word_title} U.S. Regular Retail Gasoline Price ({start_year}–{end_year})"
+        )
 
     annual_line_chart = (
         alt.layer(*annual_layers)
@@ -1333,7 +1544,7 @@ with tab_annual:
     yoy_all = ann.copy()
     yoy_all["YoY_Pct_Plot"] = yoy_all["YoY_Pct"].fillna(0.0)
     yoy_records = yoy_all[
-        ["Year_Str", "YoY_Pct_Plot", "Direction", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt"]
+        ["Year_Str", "YoY_Pct_Plot", "Direction", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt", "Is_Selected"]
     ].to_dict(orient="records")
 
     yoy_bar_chart = (
@@ -1360,9 +1571,10 @@ with tab_annual:
                 scale=alt.Scale(domain=["Increase", "Decrease"], range=["#25858e", "#d95f02"]),
                 legend=None,
             ),
+            opacity=alt.condition("datum.Is_Selected", alt.value(1.0), alt.value(0.28)),
             tooltip=[
                 alt.Tooltip("Year_Str:N", title="Year"),
-                alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual Mean"),
+                alt.Tooltip("Price_Fmt:N", title=f"{geo_short} Annual {central_word_title}"),
                 alt.Tooltip("YoY_Diff_Fmt:N", title="YoY Change ($)"),
                 alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
             ],
@@ -1394,7 +1606,7 @@ with tab_annual:
 
     annual_table_dict = {
         "Year": ann["Year_Str"],
-        f"{geo_short} Mean Price": ann["Price_Fmt"],
+        f"{geo_short} {central_word_title} Price": ann["Price_Fmt"],
     }
     if not is_us_benchmark:
         annual_table_dict["U.S. Benchmark"] = ann["US_Price_Fmt"]
@@ -1405,6 +1617,8 @@ with tab_annual:
         f"% Change vs. {start_year}": ann["Pct_Start_Fmt"],
     })
     display_annual = pd.DataFrame(annual_table_dict).iloc[::-1]
+    if is_single_annual_year:
+        display_annual = display_annual[display_annual["Year"] == str(sel_yr_a)]
 
     st.dataframe(display_annual, height="content", width="stretch", hide_index=True)
 
