@@ -494,6 +494,9 @@ selected_meta = geo_meta_map[selected_geo_label]
 is_us_benchmark = selected_meta["kind"] == "US"
 geo_short = selected_meta["short_name"]
 monthly_df, annual_df, geo_method_note = get_geography_series(selected_meta)
+for _df in (monthly_df, annual_df):
+    for _col in ("Nominal_Price", "Real_Price", "US_Benchmark_Nominal", "US_Benchmark_Real"):
+        _df[_col] = _df[_col].round(2)
 
 is_real = mode.startswith("Inflation-Adjusted")
 is_median = stat_mode == "Median"
@@ -508,6 +511,7 @@ y_label_annual = f"Mean Price ({latest_label} $)" if is_real else "Mean Price ($
 # Compute summary offset vs. U.S. national benchmark for non-US geographies
 if not is_us_benchmark:
     avg_offset_dollar = float((annual_df[price_col] - annual_df[us_bench_col]).mean())
+    avg_offset_dollar = round(avg_offset_dollar, 2)
     avg_offset_pct = float(((annual_df[price_col].mean() / annual_df[us_bench_col].mean()) - 1.0) * 100)
     st.caption(
         f"**Active Series:** {selected_meta['full_name']} · **Source:** {geo_method_note} · "
@@ -533,6 +537,8 @@ with tab_seasonal:
     summary = monthly_df.groupby("Month_Num")[price_col].agg(Count="count", Value=agg_func).reindex(range(1, 13))
     us_month_summary = monthly_df.groupby("Month_Num")[us_bench_col].agg(US_Val=agg_func).reindex(range(1, 13))
     summary["US_Value"] = us_month_summary["US_Val"]
+    summary["Value"] = summary["Value"].round(2)
+    summary["US_Value"] = summary["US_Value"].round(2)
     summary["Offset_vs_US"] = summary["Value"] - summary["US_Value"]
     summary["Month"] = month_names
 
@@ -550,12 +556,17 @@ with tab_seasonal:
             ci_lows.append(lo_mean)
             ci_highs.append(hi_mean)
 
+    ci_lows = [round(v, 2) for v in ci_lows]
+    ci_highs = [round(v, 2) for v in ci_highs]
+
     summary["CI_Low"] = ci_lows
     summary["CI_High"] = ci_highs
     summary["CI_Fmt"] = [f"${lo:.2f} – ${hi:.2f}" for lo, hi in zip(ci_lows, ci_highs)]
 
     jan_val = summary.loc[1, "Value"]
     summary["Change_vs_Jan"] = summary["Value"] - jan_val
+    summary["Offset_vs_US"] = summary["Offset_vs_US"].round(2)
+    summary["Change_vs_Jan"] = summary["Change_vs_Jan"].round(2)
     summary["Pct_Change_vs_Jan"] = (summary["Change_vs_Jan"] / jan_val) * 100
 
     prev_val = summary["Value"].shift(1)
@@ -909,6 +920,8 @@ with tab_annual:
     ann["US_Price"] = ann[us_bench_col]
     ann["Offset_vs_US"] = ann["Price"] - ann["US_Price"]
     ann["YoY_Diff"] = ann["Price"].diff()
+    ann["Offset_vs_US"] = ann["Offset_vs_US"].round(2)
+    ann["YoY_Diff"] = ann["YoY_Diff"].round(2)
     ann["YoY_Pct"] = ann["Price"].pct_change() * 100
 
     start_year = int(ann["Year"].iloc[0])
@@ -928,6 +941,8 @@ with tab_annual:
     ann_prices_arr = ann["Price"].to_numpy()
     central_ann = float(np.median(ann_prices_arr)) if is_median else float(np.mean(ann_prices_arr))
     ci_low_ann, ci_high_ann = ci_func(ann_prices_arr)
+    central_ann = round(central_ann, 2)
+    ci_low_ann, ci_high_ann = round(ci_low_ann, 2), round(ci_high_ann, 2)
     ci_ann_fmt = f"${ci_low_ann:.2f}–${ci_high_ann:.2f}"
 
     central_word_title = "Median" if is_median else "Mean"
@@ -1137,7 +1152,7 @@ with tab_annual:
                 "Category": "YoY Event 4: SPR Releases & Blending Policy",
                 "Above_Label": "",
                 "Below_Label": "SPR Release",
-                "Event": "Emergency Strategic Petroleum Reserve (SPR) drawdown & ethanol blending mandates",
+                "Event": "Emergency 30.6M-bbl Strategic Petroleum Reserve (SPR) drawdown & ethanol blending mandates",
             },
             {
                 "Year": 2012,
