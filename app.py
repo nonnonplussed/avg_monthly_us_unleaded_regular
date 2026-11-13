@@ -1,5 +1,7 @@
 import io
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import pandas as pd
 import numpy as np
@@ -259,9 +261,16 @@ def median_ci_95(values: np.ndarray) -> tuple[float, float]:
     return (float(arr[lower_idx]), float(arr[upper_idx]))
 
 
-def _fetch_url_bytes(url: str, timeout: int = 20, retries: int = 2) -> bytes:
-    """Fetch raw bytes from an upstream EIA/FRED endpoint with lightweight retry resilience."""
-    headers = {"User-Agent": "Mozilla/5.0"}
+def _fetch_url_bytes(
+    url: str,
+    timeout: tuple[float, float] = (3.5, 6.0),
+    retries: int = 0,
+) -> bytes:
+    """Fetch raw bytes from an upstream EIA/FRED endpoint with strict connect/read timeouts."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/csv,application/vnd.ms-excel,application/octet-stream,*/*;q=0.8",
+    }
     last_err: Exception | None = None
     for _ in range(retries + 1):
         try:
@@ -303,21 +312,26 @@ def _append_ytd_annual_rows(
     return annual_df, sorted(ytd_years)
 
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, show_spinner="Loading EIA gasoline & BLS CPI data...")
 def load_base_benchmarks() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, float]:
-    """Load CPI-U and U.S. national monthly/annual regular retail gasoline benchmarks."""
-    # 1. Monthly BLS CPI-U from FRED (sorted chronologically before interpolation/fill)
-    cpi_bytes = _fetch_url_bytes(FRED_CPI_URL, timeout=20)
-    cpi = pd.read_csv(io.BytesIO(cpi_bytes), na_values=".")
-    cpi.columns = ["Date", "CPI"]
-    cpi["Date"] = pd.to_datetime(cpi["Date"])
-    cpi = cpi.sort_values("Date").reset_index(drop=True)
-    cpi["CPI"] = pd.to_numeric(cpi["CPI"], errors="coerce").interpolate(method="linear").ffill().bfill()
-    cpi["YearMonth"] = cpi["Date"].dt.to_period("M")
-    cpi["Year"] = cpi["Date"].dt.year
+    """Load CPI-U and U.S. national monthly/annual regular retail gasoline benchmarks concurrently."""
+    def _safe_fetch(url: str) -> bytes | None:
+        try:
+            return _fetch_url_bytes(url, timeout=(3.5, 6.0), retries=0)
+        except Exception:
+            return None
 
-    # 2. U.S. National monthly regular retail gasoline prices
-    m_bytes = _fetch_url_bytes(EIA_MONTHLY_US_URL, timeout=20)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fut_cpi = pool.submit(_safe_fetch, FRED_CPI_URL)
+        fut_m = pool.submit(_safe_fetch, EIA_MONTHLY_US_URL)
+        fut_a = pool.submit(_safe_fetch, EIA_ANNUAL_US_URL)
+        cpi_bytes = fut_cpi.result()
+        m_bytes = fut_m.result()
+        a_bytes = fut_a.result()
+
+    # 1. U.S. National monthly regular retail gasoline prices (required primary series)
+    if m_bytes is None:
+        m_bytes = _fetch_url_bytes(EIA_MONTHLY_US_URL, timeout=(4.0, 10.0), retries=1)
     monthly_us = pd.read_excel(io.BytesIO(m_bytes), sheet_name="Data 1", skiprows=2)
     monthly_us.columns = ["Date", "US_Nominal"]
     monthly_us["Date"] = pd.to_datetime(monthly_us["Date"])
@@ -330,22 +344,45 @@ def load_base_benchmarks() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, fl
     monthly_us["YearMonth"] = monthly_us["Date"].dt.to_period("M")
     monthly_us["Year"] = monthly_us["Date"].dt.year
 
+    # 2. Monthly BLS CPI-U from FRED (graceful fallback if FRED stalls/throttles)
+    if cpi_bytes is not None:
+        cpi = pd.read_csv(io.BytesIO(cpi_bytes), na_values=".")
+        cpi.columns = ["Date", "CPI"]
+        cpi["Date"] = pd.to_datetime(cpi["Date"])
+        cpi = cpi.sort_values("Date").reset_index(drop=True)
+        cpi["CPI"] = pd.to_numeric(cpi["CPI"], errors="coerce").interpolate(method="linear").ffill().bfill()
+        cpi["YearMonth"] = cpi["Date"].dt.to_period("M")
+        cpi["Year"] = cpi["Date"].dt.year
+    else:
+        cpi = monthly_us[["Date", "YearMonth", "Year"]].copy()
+        cpi["CPI"] = 100.0
+
     # Merge CPI after chronological sort so ffill & latest_cpi always reflect the newest month
     monthly_us = pd.merge(monthly_us, cpi[["YearMonth", "CPI"]], on="YearMonth", how="left")
-    monthly_us["CPI"] = monthly_us["CPI"].ffill().bfill()
+    monthly_us["CPI"] = monthly_us["CPI"].ffill().bfill().fillna(100.0)
     latest_cpi = float(monthly_us["CPI"].iloc[-1])
     monthly_us["US_Real"] = monthly_us["US_Nominal"] * (latest_cpi / monthly_us["CPI"])
 
-    # 3. U.S. National annual regular retail gasoline prices
-    try:
-        a_bytes = _fetch_url_bytes(EIA_ANNUAL_US_URL, timeout=20)
-        annual_us = pd.read_excel(io.BytesIO(a_bytes), sheet_name="Data 1", skiprows=2)
-        annual_us.columns = ["Date", "US_Nominal"]
-        annual_us["Year"] = pd.to_datetime(annual_us["Date"]).dt.year
-    except Exception:
-        annual_us = pd.read_csv(LOCAL_ANNUAL_CSV, skiprows=4)
-        annual_us.columns = ["Year", "US_Nominal"]
-        annual_us["Year"] = pd.to_numeric(annual_us["Year"], errors="coerce").astype(int)
+    # 3. U.S. National annual regular retail gasoline prices (with local CSV & monthly synthesis fallbacks)
+    annual_us = None
+    if a_bytes is not None:
+        try:
+            annual_us = pd.read_excel(io.BytesIO(a_bytes), sheet_name="Data 1", skiprows=2)
+            annual_us.columns = ["Date", "US_Nominal"]
+            annual_us["Year"] = pd.to_datetime(annual_us["Date"]).dt.year
+        except Exception:
+            annual_us = None
+
+    if annual_us is None and os.path.exists(LOCAL_ANNUAL_CSV):
+        try:
+            annual_us = pd.read_csv(LOCAL_ANNUAL_CSV, skiprows=4)
+            annual_us.columns = ["Year", "US_Nominal"]
+            annual_us["Year"] = pd.to_numeric(annual_us["Year"], errors="coerce").astype(int)
+        except Exception:
+            annual_us = None
+
+    if annual_us is None:
+        annual_us = monthly_us.groupby("Year", as_index=False)["US_Nominal"].mean()
 
     annual_us["US_Nominal"] = pd.to_numeric(annual_us["US_Nominal"], errors="coerce")
     annual_us = annual_us[["Year", "US_Nominal"]].dropna().sort_values("Year").reset_index(drop=True)
@@ -353,20 +390,34 @@ def load_base_benchmarks() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, fl
 
     annual_cpi = cpi.groupby("Year", as_index=False)["CPI"].mean()
     annual_us = pd.merge(annual_us, annual_cpi, on="Year", how="left")
-    annual_us["CPI"] = annual_us["CPI"].ffill().bfill()
+    annual_us["CPI"] = annual_us["CPI"].ffill().bfill().fillna(latest_cpi)
     annual_us["US_Real"] = annual_us["US_Nominal"] * (latest_cpi / annual_us["CPI"])
     annual_us["Is_YTD"] = annual_us["Year"].isin(ytd_years)
 
     return monthly_us, annual_us, cpi, latest_cpi
 
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, show_spinner="Loading regional/state EIA series...")
 def load_eia_direct_series(geo_code: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch monthly and annual Regular-grade XLS series for a PADD region or one of the 9 EIA states."""
+    """Fetch monthly and annual Regular-grade XLS series concurrently for a PADD or EIA state."""
     url_m = f"{EIA_HIST_BASE}/EMM_EPMR_PTE_{geo_code}_DPGm.xls"
     url_a = f"{EIA_HIST_BASE}/EMM_EPMR_PTE_{geo_code}_DPGa.xls"
 
-    m_bytes = _fetch_url_bytes(url_m, timeout=20)
+    def _safe_fetch(url: str) -> bytes | None:
+        try:
+            return _fetch_url_bytes(url, timeout=(3.5, 6.0), retries=0)
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_m = pool.submit(_safe_fetch, url_m)
+        fut_a = pool.submit(_safe_fetch, url_a)
+        m_bytes = fut_m.result()
+        a_bytes = fut_a.result()
+
+    if m_bytes is None:
+        m_bytes = _fetch_url_bytes(url_m, timeout=(4.0, 10.0), retries=1)
+
     df_m = pd.read_excel(io.BytesIO(m_bytes), sheet_name="Data 1", skiprows=2)
     df_m.columns = ["Date", "Geo_Nominal"]
     df_m["Date"] = pd.to_datetime(df_m["Date"])
@@ -375,29 +426,28 @@ def load_eia_direct_series(geo_code: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     df_m["YearMonth"] = df_m["Date"].dt.to_period("M")
     df_m["Year"] = df_m["Date"].dt.year
 
-    a_bytes = _fetch_url_bytes(url_a, timeout=20)
-    df_a = pd.read_excel(io.BytesIO(a_bytes), sheet_name="Data 1", skiprows=2)
-    df_a.columns = ["Date", "Geo_Nominal"]
-    df_a["Year"] = pd.to_datetime(df_a["Date"]).dt.year
-    df_a["Geo_Nominal"] = pd.to_numeric(df_a["Geo_Nominal"], errors="coerce")
-    df_a = df_a[["Year", "Geo_Nominal"]].dropna().sort_values("Year").reset_index(drop=True)
-    df_a, _ = _append_ytd_annual_rows(df_a, df_m, "Geo_Nominal")
+    if a_bytes is not None:
+        df_a = pd.read_excel(io.BytesIO(a_bytes), sheet_name="Data 1", skiprows=2)
+        df_a.columns = ["Date", "Geo_Nominal"]
+        df_a["Year"] = pd.to_datetime(df_a["Date"]).dt.year
+        df_a["Geo_Nominal"] = pd.to_numeric(df_a["Geo_Nominal"], errors="coerce")
+        df_a = df_a[["Year", "Geo_Nominal"]].dropna().sort_values("Year").reset_index(drop=True)
+        df_a, _ = _append_ytd_annual_rows(df_a, df_m, "Geo_Nominal")
+    else:
+        df_a = df_m.groupby("Year", as_index=False)["Geo_Nominal"].mean()
 
     return df_m[["YearMonth", "Geo_Nominal"]], df_a
 
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, show_spinner="Loading EIA SEDS state offsets...")
 def load_seds_state_offsets() -> pd.DataFrame:
     """
     Load EIA SEDS annual motor gasoline prices (MGACD, $/MMBtu) and thermal conversion
     factors (MGTCK, MMBtu/gal) for all 50 states + D.C. and US, returning $/gal by StateCode & Year.
     """
-    headers = {"User-Agent": "Mozilla/5.0"}
-
     def _read_seds_csv(url: str, msn_filter: set[str]) -> pd.DataFrame:
-        resp = requests.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        raw = pd.read_csv(io.BytesIO(resp.content))
+        content = _fetch_url_bytes(url, timeout=(3.5, 10.0), retries=0)
+        raw = pd.read_csv(io.BytesIO(content))
         raw.columns = [c.strip() for c in raw.columns]
         if "MSN" in raw.columns and "StateCode" in raw.columns:
             sub = raw[raw["MSN"].isin(msn_filter)].copy()
@@ -420,20 +470,23 @@ def load_seds_state_offsets() -> pd.DataFrame:
                 return sub.dropna(subset=["Val"])
         raise ValueError("Unexpected SEDS CSV column layout")
 
-    try:
-        prices_long = _read_seds_csv(SEDS_PRICES_CSV_URL, {"MGACD"})
-        conv_long = _read_seds_csv(SEDS_CONVFAC_CSV_URL, {"MGTCK"})
-        merged = pd.merge(
-            prices_long[["StateCode", "Year", "Val"]].rename(columns={"Val": "MGACD"}),
-            conv_long[["StateCode", "Year", "Val"]].rename(columns={"Val": "MGTCK"}),
-            on=["StateCode", "Year"],
-            how="inner",
-        )
-    except Exception:
-        complete = _read_seds_csv(SEDS_COMPLETE_CSV_URL, {"MGACD", "MGTCK"})
-        p_df = complete[complete["MSN"] == "MGACD"][["StateCode", "Year", "Val"]].rename(columns={"Val": "MGACD"})
-        c_df = complete[complete["MSN"] == "MGTCK"][["StateCode", "Year", "Val"]].rename(columns={"Val": "MGTCK"})
-        merged = pd.merge(p_df, c_df, on=["StateCode", "Year"], how="inner")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_p = pool.submit(_read_seds_csv, SEDS_PRICES_CSV_URL, {"MGACD"})
+        fut_c = pool.submit(_read_seds_csv, SEDS_CONVFAC_CSV_URL, {"MGTCK"})
+        try:
+            prices_long = fut_p.result()
+            conv_long = fut_c.result()
+            merged = pd.merge(
+                prices_long[["StateCode", "Year", "Val"]].rename(columns={"Val": "MGACD"}),
+                conv_long[["StateCode", "Year", "Val"]].rename(columns={"Val": "MGTCK"}),
+                on=["StateCode", "Year"],
+                how="inner",
+            )
+        except Exception:
+            complete = _read_seds_csv(SEDS_COMPLETE_CSV_URL, {"MGACD", "MGTCK"})
+            p_df = complete[complete["MSN"] == "MGACD"][["StateCode", "Year", "Val"]].rename(columns={"Val": "MGACD"})
+            c_df = complete[complete["MSN"] == "MGTCK"][["StateCode", "Year", "Val"]].rename(columns={"Val": "MGTCK"})
+            merged = pd.merge(p_df, c_df, on=["StateCode", "Year"], how="inner")
 
     merged["SEDS_Price_Gal"] = merged["MGACD"] * merged["MGTCK"]
     return merged[["StateCode", "Year", "SEDS_Price_Gal"]].sort_values(["StateCode", "Year"]).reset_index(drop=True)
