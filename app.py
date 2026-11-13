@@ -773,7 +773,7 @@ with sub_col4:
         key="ci_toggle",
         disabled=ci_locked_off,
         help=(
-            "95% CI available only for monthly all-years seasonal trends"
+            "95% CI requires All years in Seasonal view"
             if ci_locked_off
             else "Adds the 95% confidence interval for the selected central tendency (Mean or Median)"
         ),
