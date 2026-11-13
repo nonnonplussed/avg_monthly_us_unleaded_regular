@@ -122,9 +122,11 @@ with tab_seasonal:
     summary["Pct_Jan_Fmt"] = summary["Pct_Change_vs_Jan"].map("{:+.1f}%".format)
     summary["MoM_Pct_Fmt"] = summary["MoM_Pct"].map("{:+.1f}%".format)
 
-    # Keep y-axis domain and chart height identical whether overlays are toggled on or off
-    y_max_m = float(max(2.85, np.ceil(summary["Mean"].max() * 2) / 2 + 0.25))
+    # Lock y-axis domain with nice=False & clamp=True so bars never shrink when overlays toggle on
+    y_max_m = float(max(2.95, np.ceil(summary["Mean"].max() * 2) / 2 + 0.45))
     y_grid_vals = [round(float(v), 1) for v in np.arange(0, y_max_m + 0.01, 0.5)]
+    locked_y_scale_m = alt.Scale(domain=[0, y_max_m], nice=False, clamp=True)
+
     date_span = f"{monthly_df['Date'].min():%B %Y} - {monthly_df['Date'].max():%B %Y}"
     subtitle_m = f"{date_span} (Inflation-Adjusted to {latest_label} Dollars)" if is_real else date_span
 
@@ -155,7 +157,7 @@ with tab_seasonal:
             y=alt.Y(
                 "Mean:Q",
                 title=y_label,
-                scale=alt.Scale(domain=[0, y_max_m]),
+                scale=locked_y_scale_m,
                 axis=alt.Axis(
                     values=y_grid_vals,
                     labelExpr="datum.value % 1 === 0 ? datum.value : ''",
@@ -196,56 +198,76 @@ with tab_seasonal:
 
     if show_seasonal_events:
         mean_lookup = dict(zip(summary["Month"], summary["Mean"]))
-        marker_pad = y_max_m * 0.024
-        span_y = float(max(mean_lookup[m] for m in ["May", "Jun", "Jul", "Aug"])) + y_max_m * 0.058
+        max_bar = float(summary["Mean"].max())
+        headroom = y_max_m - max_bar
+
+        # Position overlays high in the white space above the bars with subtle leader ticks
+        y_summer_band = max_bar + headroom * 0.62
+        y_blend_marker = max_bar + headroom * 0.30
 
         seasonal_event_points = [
             {
                 "Month": "Mar",
-                "y_pos": float(mean_lookup["Mar"]) + marker_pad,
+                "bar_top": float(mean_lookup["Mar"]),
+                "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Summer-Blend Switch",
                 "Detail": "EPA summer-blend transition & spring refinery maintenance (sharpest monthly rise)",
             },
             {
                 "Month": "Nov",
-                "y_pos": float(mean_lookup["Nov"]) + marker_pad,
+                "bar_top": float(mean_lookup["Nov"]),
+                "y_pos": y_blend_marker,
                 "Event_Type": "Monthly Event 1: Fuel Blend Transitions & Maintenance",
                 "Tag": "Winter-Blend Switch",
                 "Detail": "Autumn switch back to lower-cost winter-blend gasoline (sharpest monthly drop)",
             },
             {
                 "Month": "May",
-                "y_pos": float(mean_lookup["May"]) + marker_pad,
+                "bar_top": float(mean_lookup["May"]),
+                "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Summer driving season begins around Memorial Day",
             },
             {
                 "Month": "Jun",
-                "y_pos": float(mean_lookup["Jun"]) + marker_pad,
+                "bar_top": float(mean_lookup["Jun"]),
+                "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Peak summer highway travel demand & summer-grade fuel plateau",
             },
             {
                 "Month": "Jul",
-                "y_pos": float(mean_lookup["Jul"]) + marker_pad,
+                "bar_top": float(mean_lookup["Jul"]),
+                "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Mid-summer travel demand keeps refinery utilization elevated",
             },
             {
                 "Month": "Aug",
-                "y_pos": float(mean_lookup["Aug"]) + marker_pad,
+                "bar_top": float(mean_lookup["Aug"]),
+                "y_pos": y_summer_band,
                 "Event_Type": "Monthly Event 2: Summer Driving Season Demand",
                 "Tag": "",
                 "Detail": "Late-summer travel demand through Labor Day",
             },
         ]
 
+        leader_lines = (
+            alt.Chart(alt.Data(values=seasonal_event_points))
+            .mark_rule(color="#888888", strokeDash=[2, 2], strokeWidth=1.1)
+            .encode(
+                x=alt.X("Month:N", sort=month_names),
+                y=alt.Y("bar_top:Q", scale=locked_y_scale_m),
+                y2=alt.Y2("y_pos:Q"),
+            )
+        )
+
         span_records = [
-            {"Month": m, "span_y": span_y, "Detail": "Monthly Event 2: Summer Driving Season Demand (May–Aug)"}
+            {"Month": m, "span_y": y_summer_band, "Detail": "Monthly Event 2: Summer Driving Season Demand (May–Aug)"}
             for m in ["May", "Jun", "Jul", "Aug"]
         ]
 
@@ -254,17 +276,17 @@ with tab_seasonal:
             .mark_line(color="#d95f02", strokeWidth=2.3, strokeDash=[5, 3])
             .encode(
                 x=alt.X("Month:N", sort=month_names),
-                y=alt.Y("span_y:Q"),
+                y=alt.Y("span_y:Q", scale=locked_y_scale_m),
                 tooltip=[alt.Tooltip("Detail:N", title="Seasonal Driver")],
             )
         )
 
         span_label = (
-            alt.Chart(alt.Data(values=[{"Month": "Jun", "span_y": span_y, "Text": "Summer Driving Season (May–Aug)"}]))
-            .mark_text(dy=-8, dx=16, fontSize=10.5, fontWeight="bold", color="#111111")
+            alt.Chart(alt.Data(values=[{"Month": "Jun", "span_y": y_summer_band, "Text": "Summer Driving Season (May–Aug)"}]))
+            .mark_text(dy=-11, dx=22, fontSize=10.5, fontWeight="bold", color="#111111")
             .encode(
                 x=alt.X("Month:N", sort=month_names),
-                y=alt.Y("span_y:Q"),
+                y=alt.Y("span_y:Q", scale=locked_y_scale_m),
                 text="Text:N",
             )
         )
@@ -274,7 +296,7 @@ with tab_seasonal:
             .mark_point(shape="diamond", size=135, filled=True, stroke="white", strokeWidth=1.2)
             .encode(
                 x=alt.X("Month:N", sort=month_names),
-                y=alt.Y("y_pos:Q"),
+                y=alt.Y("y_pos:Q", scale=locked_y_scale_m),
                 fill=alt.Fill(
                     "Event_Type:N",
                     scale=alt.Scale(
@@ -299,14 +321,14 @@ with tab_seasonal:
             .mark_text(dy=-11, fontSize=10.5, fontWeight="bold", color="#111111")
             .encode(
                 x=alt.X("Month:N", sort=month_names),
-                y=alt.Y("y_pos:Q"),
+                y=alt.Y("y_pos:Q", scale=locked_y_scale_m),
                 text="Tag:N",
             )
         )
 
         seasonal_chart = (
-            alt.layer(seasonal_base, span_line, span_label, event_markers, event_labels)
-            .resolve_scale(color="independent")
+            alt.layer(seasonal_base, leader_lines, span_line, span_label, event_markers, event_labels)
+            .resolve_scale(color="independent", y="shared")
             .properties(
                 height=460,
                 title=alt.TitleParams(
@@ -356,7 +378,8 @@ with tab_seasonal:
     st.dataframe(display_seasonal, height="content", width="stretch", hide_index=True)
 
     st.caption(
-        f"Sources: U.S. EIA (EMM_EPMR_PTE_NUS_DPG) & BLS CPI-U via FRED (CPIAUCSL), "
+        f"Sources: [U.S. EIA Monthly Retail Gasoline Prices (EMM_EPMR_PTE_NUS_DPG, XLS)]({EIA_MONTHLY_URL}) & "
+        f"[BLS CPI-U via FRED (CPIAUCSL, CSV)]({FRED_CPI_URL}), "
         f"{date_span} ({len(monthly_df)} monthly observations)."
     )
 
@@ -410,12 +433,18 @@ with tab_annual:
         ["Year_Str", "Price", "Price_Fmt", "YoY_Diff_Fmt", "YoY_Pct_Fmt", "Pct_Start_Fmt"]
     ].to_dict(orient="records")
 
-    # Keep y-axis domain, x-axis domain, and chart height identical whether overlays are on or off
+    # Lock y-axis domain and share an explicit band x-scale across both stacked charts
     y_max_a = float(np.ceil(ann["Price"].max() * 2) / 2 + 0.25)
+    locked_y_scale_a = alt.Scale(domain=[0, y_max_a], nice=False, clamp=True)
     all_year_strs = ann["Year_Str"].tolist()
     tick_years = [str(y) for y in range(start_year, end_year + 1, 3)]
 
-    shared_x_scale = alt.Scale(domain=all_year_strs, paddingInner=0.22, paddingOuter=0.06)
+    shared_x_scale = alt.Scale(
+        type="band",
+        domain=all_year_strs,
+        paddingInner=0.22,
+        paddingOuter=0.35,
+    )
     shared_x_axis = alt.Axis(
         values=tick_years,
         labelAngle=0,
@@ -440,14 +469,14 @@ with tab_annual:
         y=alt.Y(
             "Price:Q",
             title=y_label,
-            scale=alt.Scale(domain=[0, y_max_a]),
+            scale=locked_y_scale_a,
             axis=alt.Axis(
                 grid=True,
                 gridColor="#EAEAEA",
                 labelFontSize=12,
                 titleFontSize=13,
                 titlePadding=8,
-                minExtent=36,
+                minExtent=38,
                 labelColor="#333333",
                 titleColor="#111111",
             ),
@@ -455,7 +484,7 @@ with tab_annual:
     )
 
     points_layer = base_annual.mark_circle(size=70, color="#1f6f78", opacity=0.95).encode(
-        y=alt.Y("Price:Q"),
+        y=alt.Y("Price:Q", scale=locked_y_scale_a),
         tooltip=[
             alt.Tooltip("Year_Str:N", title="Year"),
             alt.Tooltip("Price_Fmt:N", title="Average Price"),
@@ -593,7 +622,7 @@ with tab_annual:
             .mark_point(shape="diamond", size=140, filled=True, stroke="white", strokeWidth=1.2)
             .encode(
                 x=alt.X("Year_Str:O", scale=shared_x_scale),
-                y=alt.Y("Price:Q"),
+                y=alt.Y("Price:Q", scale=locked_y_scale_a),
                 color=alt.Color(
                     "Category:N",
                     scale=alt.Scale(domain=event_categories, range=event_colors),
@@ -614,7 +643,7 @@ with tab_annual:
             .mark_text(dy=-11, fontSize=9.8, fontWeight="bold", color="#111111")
             .encode(
                 x=alt.X("Year_Str:O", scale=shared_x_scale),
-                y=alt.Y("Price:Q"),
+                y=alt.Y("Price:Q", scale=locked_y_scale_a),
                 text="Above_Label:N",
             )
         )
@@ -624,16 +653,17 @@ with tab_annual:
             .mark_text(dy=16, fontSize=9.8, fontWeight="bold", color="#111111")
             .encode(
                 x=alt.X("Year_Str:O", scale=shared_x_scale),
-                y=alt.Y("Price:Q"),
+                y=alt.Y("Price:Q", scale=locked_y_scale_a),
                 text="Below_Label:N",
             )
         )
 
         annual_line_chart = (
             alt.layer(area_layer, points_layer, event_rules, event_diamonds, above_texts, below_texts)
-            .resolve_scale(color="independent")
+            .resolve_scale(color="independent", y="shared")
             .properties(
-                height=390,
+                width=640,
+                height=370,
                 title=alt.TitleParams(
                     text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
                     subtitle=subtitle_a,
@@ -645,8 +675,6 @@ with tab_annual:
                     offset=14,
                 ),
             )
-            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
         )
     else:
         subtitle_a = (
@@ -658,13 +686,15 @@ with tab_annual:
         mean_rule = (
             alt.Chart(alt.Data(values=[{"mean_val": mean_ann}]))
             .mark_rule(color="#666666", strokeDash=[6, 4], strokeWidth=1.4)
-            .encode(y="mean_val:Q")
+            .encode(y=alt.Y("mean_val:Q", scale=locked_y_scale_a))
         )
 
         annual_line_chart = (
             alt.layer(area_layer, points_layer, mean_rule)
+            .resolve_scale(y="shared")
             .properties(
-                height=390,
+                width=640,
+                height=370,
                 title=alt.TitleParams(
                     text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
                     subtitle=subtitle_a,
@@ -676,13 +706,9 @@ with tab_annual:
                     offset=14,
                 ),
             )
-            .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-            .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
         )
 
-    st.altair_chart(annual_line_chart, width="stretch")
-
-    # Include all years (1992–2025) on the x-axis so every year lines up identically with the chart above
+    # Bottom bar chart uses the exact same shared band x-scale and vconcat alignment
     yoy_all = ann.copy()
     yoy_all["YoY_Pct_Plot"] = yoy_all["YoY_Pct"].fillna(0.0)
     yoy_records = yoy_all[
@@ -708,7 +734,7 @@ with tab_annual:
                     labelFontSize=12,
                     titleFontSize=13,
                     titlePadding=8,
-                    minExtent=36,
+                    minExtent=38,
                     labelColor="#333333",
                     titleColor="#111111",
                 ),
@@ -726,7 +752,8 @@ with tab_annual:
             ],
         )
         .properties(
-            height=270,
+            width=640,
+            height=250,
             title=alt.TitleParams(
                 text=f"Year-over-Year Percentage Price Change ({start_year}–{end_year})",
                 subtitle="Annual percentage swing compared to the prior calendar year (1992 baseline has no prior year)",
@@ -738,11 +765,16 @@ with tab_annual:
                 offset=14,
             ),
         )
-        .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
-        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 14})
     )
 
-    st.altair_chart(yoy_bar_chart, width="stretch")
+    combined_annual_chart = (
+        alt.vconcat(annual_line_chart, yoy_bar_chart, spacing=28)
+        .resolve_scale(x="shared")
+        .configure_view(stroke="#333333", strokeWidth=0.8, fill="white")
+        .configure(background="white", padding={"top": 20, "bottom": 18, "left": 14, "right": 20})
+    )
+
+    st.altair_chart(combined_annual_chart, width="stretch")
 
     display_annual = pd.DataFrame({
         "Year": ann["Year_Str"],
@@ -755,8 +787,8 @@ with tab_annual:
     st.dataframe(display_annual, height="content", width="stretch", hide_index=True)
 
     st.caption(
-        f"Sources: U.S. EIA Annual Retail Gasoline Prices (EMM_EPMR_PTE_NUS_DPG, {start_year}–{end_year}) "
-        f"& BLS CPI-U via FRED (CPIAUCSL)."
+        f"Sources: [U.S. EIA Annual Retail Gasoline Prices (EMM_EPMR_PTE_NUS_DPG, {start_year}–{end_year}, XLS)]({EIA_ANNUAL_URL}) & "
+        f"[BLS CPI-U via FRED (CPIAUCSL, CSV)]({FRED_CPI_URL})."
     )
 
 with st.expander("View Python Source Code"):
