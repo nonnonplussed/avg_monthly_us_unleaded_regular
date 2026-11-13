@@ -904,11 +904,39 @@ with tab_seasonal:
     })
     st.dataframe(pd.DataFrame(seasonal_table_dict), height="content", width="stretch", hide_index=True)
 
-    st.caption(
-        f"Sources: [U.S. EIA Retail Gasoline Prices](https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_nus_m.htm), "
-        f"[EIA SEDS State Price Estimates](https://www.eia.gov/state/seds/), & "
-        f"[BLS CPI-U via FRED (CPIAUCSL)]({FRED_CPI_URL}), {date_span}."
-    )
+_kind = selected_meta["kind"]
+    _padd_code = selected_meta["padd"]
+    _us_m_link = "[U.S. EIA Retail Gasoline Prices (`NUS`)](https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_nus_m.htm)"
+    _cpi_link = f"[BLS CPI-U via FRED (`CPIAUCSL`)]({FRED_CPI_URL})"
+
+    if _kind == "US":
+        _source_links = f"{_us_m_link} & {_cpi_link}"
+    elif _kind == "PADD":
+        _padd_url = f"https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_{_padd_code.lower()}_m.htm"
+        _source_links = (
+            f"[EIA {geo_short} Retail Gasoline Prices (`{_padd_code}`)]({_padd_url}), "
+            f"{_us_m_link}, & {_cpi_link}"
+        )
+    elif _kind == "STATE_DIRECT":
+        _st_eia = selected_meta["eia_geo"]
+        _st_url = f"https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_{_st_eia.lower()}_m.htm"
+        _padd_url = f"https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_{_padd_code.lower()}_m.htm"
+        _source_links = (
+            f"[EIA {geo_short} Retail Gasoline Prices (`{_st_eia}`)]({_st_url}), "
+            f"[EIA `{_padd_code}` Backfill Series]({_padd_url}), "
+            f"{_us_m_link}, & {_cpi_link}"
+        )
+    else:
+        _padd_name = PADD_REGIONS[_padd_code].split(": ", 1)[1]
+        _padd_url = f"https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_{_padd_code.lower()}_m.htm"
+        _source_links = (
+            f"[EIA SEDS State Prices (`pr_all.csv`)]({SEDS_PRICES_CSV_URL}), "
+            f"[EIA SEDS Conversion Factors (`use_convfac.csv`)]({SEDS_CONVFAC_CSV_URL}), "
+            f"[EIA {_padd_name} (`{_padd_code}`) Seasonal Series]({_padd_url}), "
+            f"{_us_m_link}, & {_cpi_link}"
+        )
+
+    st.caption(f"Sources: {_source_links}, {date_span}.")
 
 # ==============================================================================
 # TAB 2: ANNUAL TRENDS (1992–PRESENT)
