@@ -86,9 +86,9 @@ is_real = mode.startswith("Inflation-Adjusted")
 is_median = stat_mode == "Median"
 price_col = "Real_Price" if is_real else "Nominal_Price"
 agg_func = "median" if is_median else "mean"
-stat_noun = "Median" if is_median else "Average"
+stat_noun = "Median" if is_median else "Mean"
 y_label_seasonal = f"{stat_noun} Price ({latest_label} $)" if is_real else f"{stat_noun} Price ($)"
-y_label_annual = f"Average Price ({latest_label} $)" if is_real else "Average Price ($)"
+y_label_annual = f"Mean Price ({latest_label} $)" if is_real else "Mean Price ($)"
 
 # Overlay toggles placed directly below Price Basis & Central Tendency
 ov_col1, ov_col2 = st.columns(2)
@@ -513,21 +513,27 @@ with tab_annual:
         y=alt.Y("Price:Q", scale=locked_y_scale_a),
         tooltip=[
             alt.Tooltip("Year_Str:N", title="Year"),
-            alt.Tooltip("Price_Fmt:N", title="Annual Average Price"),
+            alt.Tooltip("Price_Fmt:N", title="Annual Mean Price"),
             alt.Tooltip("YoY_Diff_Fmt:N", title="YoY Change ($)"),
             alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
             alt.Tooltip("Pct_Start_Fmt:N", title=f"% Change vs. {start_year}"),
         ],
     )
 
-    if show_annual_events:
-        # Overlay ON: omit the horizontal central-tendency dashed line completely
-        subtitle_a = (
-            f"{len(ann)}-year {central_word_lower}: ${central_ann:.2f}/gal ({latest_label} Dollars) · Hover any year or diamond for details"
-            if is_real
-            else f"{len(ann)}-year {central_word_lower}: ${central_ann:.2f}/gal (Nominal) · Hover any year or diamond for details"
-        )
+    # Always render the horizontal dashed reference line at the selected 34-year Mean or Median
+    central_rule = (
+        alt.Chart(alt.Data(values=[{"central_val": central_ann}]))
+        .mark_rule(color="#555555", strokeDash=[6, 4], strokeWidth=1.5)
+        .encode(y=alt.Y("central_val:Q", scale=locked_y_scale_a))
+    )
 
+    subtitle_a = (
+        f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal, {latest_label} Dollars) · Hover any year for details"
+        if is_real
+        else f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal, Nominal) · Hover any year for details"
+    )
+
+    if show_annual_events:
         annual_events_meta = [
             {
                 "Year": 1998,
@@ -659,7 +665,7 @@ with tab_annual:
                     alt.Tooltip("Year_Str:N", title="Year"),
                     alt.Tooltip("Category:N", title="Driver Category"),
                     alt.Tooltip("Event:N", title="Event"),
-                    alt.Tooltip("Price_Fmt:N", title="Annual Average Price"),
+                    alt.Tooltip("Price_Fmt:N", title="Annual Mean Price"),
                     alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
                 ],
             )
@@ -686,13 +692,13 @@ with tab_annual:
         )
 
         annual_line_chart = (
-            alt.layer(area_layer, points_layer, event_rules, event_diamonds, above_texts, below_texts)
+            alt.layer(area_layer, points_layer, central_rule, event_rules, event_diamonds, above_texts, below_texts)
             .resolve_scale(color="independent", y="shared")
             .properties(
                 width=640,
                 height=370,
                 title=alt.TitleParams(
-                    text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
+                    text=f"Annual Mean U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
                     subtitle=subtitle_a,
                     anchor="start",
                     fontSize=16.5,
@@ -704,19 +710,6 @@ with tab_annual:
             )
         )
     else:
-        # Overlay OFF: show the horizontal dashed reference line at the selected 34-year Mean or Median
-        subtitle_a = (
-            f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal, {latest_label} Dollars) · Hover any year for details"
-            if is_real
-            else f"Dashed line = {len(ann)}-year {central_word_lower} (${central_ann:.2f}/gal, Nominal) · Hover any year for details"
-        )
-
-        central_rule = (
-            alt.Chart(alt.Data(values=[{"central_val": central_ann}]))
-            .mark_rule(color="#666666", strokeDash=[6, 4], strokeWidth=1.4)
-            .encode(y=alt.Y("central_val:Q", scale=locked_y_scale_a))
-        )
-
         annual_line_chart = (
             alt.layer(area_layer, points_layer, central_rule)
             .resolve_scale(y="shared")
@@ -724,7 +717,7 @@ with tab_annual:
                 width=640,
                 height=370,
                 title=alt.TitleParams(
-                    text=f"Annual Average U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
+                    text=f"Annual Mean U.S. Regular Retail Gasoline Price ({start_year}–{end_year})",
                     subtitle=subtitle_a,
                     anchor="start",
                     fontSize=16.5,
@@ -774,7 +767,7 @@ with tab_annual:
             ),
             tooltip=[
                 alt.Tooltip("Year_Str:N", title="Year"),
-                alt.Tooltip("Price_Fmt:N", title="Annual Average Price"),
+                alt.Tooltip("Price_Fmt:N", title="Annual Mean Price"),
                 alt.Tooltip("YoY_Diff_Fmt:N", title="YoY Change ($)"),
                 alt.Tooltip("YoY_Pct_Fmt:N", title="YoY Change (%)"),
             ],
@@ -806,7 +799,7 @@ with tab_annual:
 
     display_annual = pd.DataFrame({
         "Year": ann["Year_Str"],
-        "Average Price": ann["Price_Fmt"],
+        "Mean Price": ann["Price_Fmt"],
         "YoY Change ($)": ann["YoY_Diff_Fmt"],
         "YoY Change (%)": ann["YoY_Pct_Fmt"],
         f"% Change vs. {start_year}": ann["Pct_Start_Fmt"],
