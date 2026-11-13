@@ -678,7 +678,7 @@ selected_geo_pre = st.session_state.get("geo_select", geo_options[0])
 is_us_pre = geo_meta_map.get(selected_geo_pre, {"kind": "US"})["kind"] == "US"
 selected_seasonal_yr_pre = st.session_state.get("seasonal_year_select", all_seasonal_label_global)
 is_single_seasonal_yr_pre = selected_seasonal_yr_pre != all_seasonal_label_global
-ci_locked_off = (active_tab_pre == seasonal_tab_label) and (not is_us_pre) and is_single_seasonal_yr_pre
+ci_locked_off = (active_tab_pre == seasonal_tab_label) and is_single_seasonal_yr_pre
 
 if "user_ci_pref" not in st.session_state:
     st.session_state["user_ci_pref"] = True
